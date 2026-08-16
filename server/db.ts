@@ -337,7 +337,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(announcements).orderBy(desc(announcements.createdAt)).limit(5),
     db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
     db.select().from(learnerEvents).where(eq(learnerEvents.learnerId, learner.id)).orderBy(learnerEvents.eventDate),
-    db.select().from(recommendedTests).where(and(eq(recommendedTests.category, category), lte(recommendedTests.startDate, new Date().toISOString().slice(0, 10)), gte(recommendedTests.endDate, new Date().toISOString().slice(0, 10)))).orderBy(desc(recommendedTests.createdAt)),
+    db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, new Date().toISOString().slice(0, 10)), gte(recommendedTests.endDate, new Date().toISOString().slice(0, 10)))).orderBy(desc(recommendedTests.createdAt)),
     db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
