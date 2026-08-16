@@ -11,6 +11,7 @@ import {
   deleteCardSet,
   deleteStandardEntry,
   deleteRecommendedTest,
+  deleteCalendarEvent,
   getDayDetail,
   getAdminOverview,
   getDashboard,
@@ -35,6 +36,7 @@ import { publicProcedure, router } from "./_core/trpc";
 const pin = z.string().regex(/^\d{4}$/, "4桁のPINコードを入力してください");
 const category = z.enum(["english", "kanji"]);
 const entry = z.object({ front: z.string().min(1).max(500), back: z.string().min(1).max(500), writingAnswer: z.string().max(500).optional().nullable() });
+export const importEntriesInput = z.object({ pin, bookId: z.number().int().positive(), entries: z.array(entry).max(3000) });
 
 export const appRouter = router({
   system: systemRouter,
@@ -52,7 +54,7 @@ export const appRouter = router({
     entries: publicProcedure.input(z.object({ pin, bookId: z.number().int().positive() })).query(({ input }) => getWordEntries(input.pin, input.bookId)),
     cardSets: publicProcedure.input(z.object({ pin, category })).query(({ input }) => listCardSets(input.pin, input.category)),
     createBook: publicProcedure.input(z.object({ pin, category, name: z.string().trim().min(1).max(160) })).mutation(({ input }) => createPersonalBook(input.pin, input.category, input.name)),
-    importEntries: publicProcedure.input(z.object({ pin, bookId: z.number().int().positive(), entries: z.array(entry).max(1000) })).mutation(({ input }) => replacePersonalEntries(input.pin, input.bookId, input.entries)),
+    importEntries: publicProcedure.input(importEntriesInput).mutation(({ input }) => replacePersonalEntries(input.pin, input.bookId, input.entries)),
     savePersonalEntry: publicProcedure.input(z.object({ pin, id: z.number().int().positive().optional(), bookId: z.number().int().positive(), front: z.string().trim().min(1).max(500), back: z.string().trim().min(1).max(500), writingAnswer: z.string().max(500).optional().nullable() })).mutation(({ input }) => savePersonalEntry(input.pin, input)),
     deletePersonalEntry: publicProcedure.input(z.object({ pin, bookId: z.number().int().positive(), entryId: z.number().int().positive() })).mutation(({ input }) => deletePersonalEntry(input.pin, input.bookId, input.entryId)),
     createCardSet: publicProcedure.input(z.object({ pin, bookId: z.number().int().positive(), category, name: z.string().trim().min(1).max(120), startNo: z.number().int().positive(), endNo: z.number().int().positive() })).mutation(({ input }) => createCardSet(input.pin, input)),
@@ -71,6 +73,7 @@ export const appRouter = router({
     saveStandardEntry: publicProcedure.input(z.object({ password: z.string(), id: z.number().int().positive().optional(), bookId: z.number().int().positive(), entryNo: z.number().int().positive(), front: z.string().min(1).max(500), back: z.string().min(1).max(500), writingAnswer: z.string().max(500).optional().nullable() })).mutation(({ input }) => saveStandardEntry(input.password, input)),
     deleteStandardEntry: publicProcedure.input(z.object({ password: z.string(), entryId: z.number().int().positive() })).mutation(({ input }) => deleteStandardEntry(input.password, input.entryId)),
     deleteRecommendedTest: publicProcedure.input(z.object({ password: z.string(), testId: z.number().int().positive() })).mutation(({ input }) => deleteRecommendedTest(input.password, input.testId)),
+    deleteCalendarEvent: publicProcedure.input(z.object({ password: z.string(), eventId: z.number().int().positive() })).mutation(({ input }) => deleteCalendarEvent(input.password, input.eventId)),
     publishAnnouncement: publicProcedure.input(z.object({ password: z.string(), title: z.string().trim().min(1).max(160), body: z.string().trim().min(1).max(2000) })).mutation(({ input }) => publishAnnouncement(input.password, input.title, input.body)),
     publishRecommendedTest: publicProcedure.input(z.object({ password: z.string(), title: z.string().trim().min(1).max(160), category, bookId: z.number().int().positive(), startNo: z.number().int().positive(), endNo: z.number().int().positive(), questionCount: z.number().int().min(1).max(100), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })).mutation(({ input }) => publishRecommendedTest(input.password, input)),
     addCalendarEvent: publicProcedure.input(z.object({ password: z.string(), eventDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), title: z.string().trim().min(1).max(160), category: z.enum(["english", "kanji", "both"]) })).mutation(({ input }) => addCalendarEvent(input.password, input)),

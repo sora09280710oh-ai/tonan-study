@@ -311,14 +311,15 @@ export async function getDayDetail(pin: string, category: StudyCategory, date: s
   const entryIds = books.length ? (await db.select({ id: wordEntries.id }).from(wordEntries).where(inArray(wordEntries.bookId, books.map(book => book.id)))).map(item => item.id) : [];
   const start = new Date(`${date}T00:00:00`);
   const end = new Date(start.getTime() + 86_400_000);
-  const [sessions, progress, events] = await Promise.all([
+  const [sessions, progress, dueProgress, events] = await Promise.all([
     db.select().from(studySessions).where(and(eq(studySessions.learnerId, learner.id), gte(studySessions.createdAt, start), lte(studySessions.createdAt, end))),
     entryIds.length ? db.select().from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), inArray(studyProgress.entryId, entryIds), gte(studyProgress.lastReviewedAt, start), lte(studyProgress.lastReviewedAt, end))) : Promise.resolve([]),
+    entryIds.length ? db.select().from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), inArray(studyProgress.entryId, entryIds), gte(studyProgress.nextReviewAt, start), lte(studyProgress.nextReviewAt, end))) : Promise.resolve([]),
     db.select().from(learnerEvents).where(and(eq(learnerEvents.learnerId, learner.id), eq(learnerEvents.eventDate, date))),
   ]);
   const learned = progress.filter(item => item.correctCount > 0).length;
   const retention = progress.length ? Math.round(progress.reduce((sum, item) => sum + item.strength, 0) / progress.length) : 0;
-  return { date, totalSeconds: sessions.reduce((sum, item) => sum + item.seconds, 0), learned, retention, events };
+  return { date, totalSeconds: sessions.reduce((sum, item) => sum + item.seconds, 0), learned, retention, reviewDue: dueProgress.length, events };
 }
 
 export async function getDashboard(pin: string, category: StudyCategory) {
@@ -356,6 +357,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     personalEvents,
     recommendations,
     mistakeEntryIds: relevantProgress.filter(item => item.incorrectCount > 0).sort((left, right) => right.incorrectCount - left.incorrectCount).map(item => item.entryId),
+    reviewDates: relevantProgress.filter(item => item.nextReviewAt).map(item => item.nextReviewAt),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
   };
 }
@@ -393,6 +395,13 @@ export async function deleteStandardEntry(password: string, entryId: number) {
   const book = (await db.select().from(wordBooks).where(eq(wordBooks.id, entry.bookId)).limit(1))[0];
   if (!book || book.kind !== "standard") throw new Error("標準単語帳の単語のみ削除できます");
   await db.delete(wordEntries).where(eq(wordEntries.id, entryId));
+}
+
+export async function deleteCalendarEvent(password: string, eventId: number) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.delete(calendarEvents).where(eq(calendarEvents.id, eventId));
 }
 
 export async function deleteRecommendedTest(password: string, testId: number) {
