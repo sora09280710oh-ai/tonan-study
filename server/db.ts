@@ -433,6 +433,16 @@ export async function deleteRecommendedTest(password: string, testId: number) {
   await db.delete(recommendedTests).where(eq(recommendedTests.id, testId));
 }
 
+export async function createStandardBook(password: string, category: StudyCategory, name: string) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const trimmedName = name.trim();
+  if (!trimmedName) throw new Error("単語帳名を入力してください");
+  const created = await db.insert(wordBooks).values({ category, kind: "standard", name: trimmedName }).$returningId();
+  return created[0]?.id;
+}
+
 export async function saveStandardEntry(password: string, input: { id?: number; bookId: number; entryNo: number; front: string; back: string; writingAnswer?: string | null }) {
   await requireAdminPassword(password);
   const db = await getDb();
