@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   announcements,
   calendarEvents,
@@ -19,7 +19,7 @@ import { calculateStreak, nextReviewDate, nextStrength } from "./studyLogic";
 import { ENV } from "./_core/env";
 
 export type StudyCategory = "english" | "kanji";
-type EntryDraft = { front: string; back: string; writingAnswer?: string | null };
+type EntryDraft = { front: string; back: string; writingAnswer?: string | null; importBatchId?: string | null };
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -384,6 +384,28 @@ export async function getAdminOverview(password: string) {
     db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
   ]);
   return { books, entries, announcements: announcementList, tests, events };
+}
+
+export async function replaceStandardEntries(password: string, bookId: number, entries: EntryDraft[]) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const book = (await db.select().from(wordBooks).where(eq(wordBooks.id, bookId)).limit(1))[0];
+  if (!book || book.kind !== "standard") throw new Error("標準単語帳を選択してください");
+  if (!entries.length || entries.length > 3000) throw new Error("CSVは1〜3,000語で指定してください");
+  const batchId = randomUUID().replace(/-/g, "").slice(0, 32);
+  await db.delete(wordEntries).where(eq(wordEntries.bookId, bookId));
+  await db.insert(wordEntries).values(entries.map((item, index) => ({ bookId, entryNo: index + 1, front: item.front, back: item.back, writingAnswer: item.writingAnswer ?? null, importBatchId: batchId })));
+  return { batchId, count: entries.length };
+}
+
+export async function deleteStandardImportBatch(password: string, bookId: number, batchId: string) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const book = (await db.select().from(wordBooks).where(eq(wordBooks.id, bookId)).limit(1))[0];
+  if (!book || book.kind !== "standard") throw new Error("標準単語帳を選択してください");
+  await db.delete(wordEntries).where(and(eq(wordEntries.bookId, bookId), eq(wordEntries.importBatchId, batchId)));
 }
 
 export async function deleteStandardEntry(password: string, entryId: number) {

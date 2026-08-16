@@ -39,11 +39,13 @@ export const wordEntries = mysqlTable("wordEntries", {
   front: text("front").notNull(),
   back: text("back").notNull(),
   writingAnswer: text("writingAnswer"),
+  importBatchId: varchar("importBatchId", { length: 64 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [
   uniqueIndex("wordEntries_book_number_unique").on(table.bookId, table.entryNo),
   index("wordEntries_book_idx").on(table.bookId),
+  index("wordEntries_import_batch_idx").on(table.importBatchId),
 ]);
 
 export const cardSets = mysqlTable("cardSets", {
