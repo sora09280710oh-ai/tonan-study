@@ -2,6 +2,7 @@ import { HandwritingPad } from "@/components/HandwritingPad";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { Label } from "@/components/ui/label";
@@ -165,6 +166,28 @@ function PersonalSchedule({ pin, events }: { pin: string; events: { id: number; 
   return <Card><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><CalendarDays className="h-4 w-4 text-primary" />マイ予定</CardTitle><CardDescription>自分だけのテスト日・復習日を登録できます。</CardDescription></CardHeader><CardContent className="space-y-3"><div className="grid grid-cols-[1fr_1.4fr_auto] gap-2"><Input type="date" value={eventDate} onChange={event => setEventDate(event.target.value)} aria-label="予定日" /><Input value={title} onChange={event => setTitle(event.target.value)} placeholder="例：Unit 3 テスト" aria-label="予定内容" /><Button size="icon" disabled={!eventDate || !title.trim() || create.isPending} onClick={() => create.mutate({ pin, eventDate, title })}><Plus className="h-4 w-4" /></Button></div><div className="space-y-1">{events.length ? events.slice(0, 4).map(event => <div key={event.id} className="flex items-center gap-2 rounded-xl bg-muted/60 px-3 py-2"><span className="shrink-0 text-xs font-medium text-primary">{event.eventDate.slice(5).replace("-", "/")}</span><span className="min-w-0 flex-1 truncate text-sm">{event.title}</span><Button size="icon" variant="ghost" className="h-7 w-7 rounded-full" aria-label={`${event.title}を削除`} onClick={() => remove.mutate({ pin, eventId: event.id })}><X className="h-3.5 w-3.5" /></Button></div>) : <p className="rounded-xl border border-dashed p-3 text-center text-xs text-muted-foreground">登録した予定はカレンダーに表示されます。</p>}</div></CardContent></Card>;
 }
 
+function readPomodoroState() {
+  try { return JSON.parse(localStorage.getItem("tonan-pomodoro-v1") ?? "null") ?? {}; } catch { return {}; }
+}
+
+function PersistentTimerBar() {
+  const [state, setState] = useState(() => readPomodoroState());
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const sync = () => setState(readPomodoroState());
+    window.addEventListener("tonan-pomodoro-update", sync);
+    window.addEventListener("storage", sync);
+    const timer = window.setInterval(() => { setState(readPomodoroState()); setTick(value => value + 1); }, 500);
+    return () => { window.removeEventListener("tonan-pomodoro-update", sync); window.removeEventListener("storage", sync); window.clearInterval(timer); };
+  }, []);
+  const running = Boolean(state.persistent && state.running && state.endAt && state.endAt > Date.now());
+  if (!running) return null;
+  const seconds = Math.max(0, Math.ceil((state.endAt - Date.now()) / 1000));
+  const time = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  const update = (next: Record<string, unknown>) => { const current = readPomodoroState(); const value = { ...current, ...next }; localStorage.setItem("tonan-pomodoro-v1", JSON.stringify(value)); setState(value); window.dispatchEvent(new Event("tonan-pomodoro-update")); };
+  return <div className="fixed inset-x-0 top-0 z-[60] h-8 border-b border-slate-700/80 bg-slate-950/95 px-3 text-white shadow-sm backdrop-blur" role="status" aria-label="継続中のタイマー"><div className="mx-auto flex h-full max-w-2xl items-center justify-between gap-2"><span className="truncate text-[10px] font-semibold text-slate-300">{state.focus ? "集中" : "休憩"} <span className="ml-1 font-mono text-xs text-white">{time}</span></span><div className="flex items-center gap-1"><Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-white hover:bg-white/10 hover:text-white" onClick={() => update({ running: false, endAt: null })}>{state.running ? <Pause className="mr-1 h-3 w-3" /> : <Play className="mr-1 h-3 w-3" />}停止</Button><Button type="button" size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-white hover:bg-white/10 hover:text-white" onClick={() => update({ running: true, endAt: Date.now() + (Number(state.seconds) || 25 * 60) * 1000 })}><Play className="mr-1 h-3 w-3" />開始</Button><Button type="button" size="sm" variant="ghost" className="h-6 w-6 p-0 text-white hover:bg-white/10 hover:text-white" aria-label="タイマーをリセット" onClick={() => update({ running: false, endAt: null, focus: true, seconds: 25 * 60 })}><TimerReset className="h-3 w-3" /></Button></div></div></div>;
+}
+
 function Pomodoro({ pin }: { pin: string }) {
   const [seconds, setSeconds] = useState(() => {
     try { const saved = JSON.parse(localStorage.getItem("tonan-pomodoro-v1") ?? "null"); if (saved?.running && saved.endAt) return Math.max(0, Math.ceil((saved.endAt - Date.now()) / 1000)); return Number.isFinite(saved?.seconds) ? saved.seconds : 25 * 60; } catch { return 25 * 60; }
@@ -172,13 +195,15 @@ function Pomodoro({ pin }: { pin: string }) {
   const [running, setRunning] = useState(() => { try { const saved = JSON.parse(localStorage.getItem("tonan-pomodoro-v1") ?? "null"); return Boolean(saved?.running && saved.endAt > Date.now()); } catch { return false; } });
   const [focus, setFocus] = useState(() => { try { return JSON.parse(localStorage.getItem("tonan-pomodoro-v1") ?? "null")?.focus !== false; } catch { return true; } });
   const [endAt, setEndAt] = useState<number | null>(() => { try { const value = JSON.parse(localStorage.getItem("tonan-pomodoro-v1") ?? "null")?.endAt; return typeof value === "number" && value > Date.now() ? value : null; } catch { return null; } });
+  const [persistent, setPersistent] = useState(() => { try { return Boolean(JSON.parse(localStorage.getItem("tonan-pomodoro-v1") ?? "null")?.persistent); } catch { return false; } });
   const record = trpc.learning.recordTimer.useMutation();
+  useEffect(() => { const sync = () => { const saved = readPomodoroState(); setSeconds(Number.isFinite(saved.seconds) ? saved.seconds : 25 * 60); setRunning(Boolean(saved.running && saved.endAt > Date.now())); setFocus(saved.focus !== false); setEndAt(typeof saved.endAt === "number" && saved.endAt > Date.now() ? saved.endAt : null); setPersistent(Boolean(saved.persistent)); }; window.addEventListener("tonan-pomodoro-update", sync); return () => window.removeEventListener("tonan-pomodoro-update", sync); }, []);
   useEffect(() => {
     if (!running || !endAt) return;
     const tick = () => { const remaining = Math.max(0, Math.ceil((endAt - Date.now()) / 1000)); setSeconds(remaining); if (remaining === 0) setRunning(false); };
     tick(); const timer = window.setInterval(tick, 500); return () => window.clearInterval(timer);
   }, [running, endAt]);
-  useEffect(() => { localStorage.setItem("tonan-pomodoro-v1", JSON.stringify({ seconds, running, focus, endAt })); }, [seconds, running, focus, endAt]);
+  useEffect(() => { localStorage.setItem("tonan-pomodoro-v1", JSON.stringify({ seconds, running, focus, endAt, persistent })); window.dispatchEvent(new Event("tonan-pomodoro-update")); }, [seconds, running, focus, endAt, persistent]);
   useEffect(() => {
     if (seconds !== 0) return;
     setRunning(false); setEndAt(null);
@@ -188,7 +213,7 @@ function Pomodoro({ pin }: { pin: string }) {
   const toggleRunning = () => { if (running) { setRunning(false); setEndAt(null); } else { const nextEndAt = Date.now() + seconds * 1000; setEndAt(nextEndAt); setRunning(true); } };
   const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
   const rest = String(seconds % 60).padStart(2, "0");
-  return <Card className="overflow-hidden border-0 bg-slate-900 text-white shadow-lg"><CardContent className="flex items-center justify-between p-5"><div><div className="mb-1 flex items-center gap-2 text-xs text-slate-300"><AlarmClock className="h-4 w-4 text-amber-300" />{focus ? "集中タイム" : "休憩タイム"}</div><p className="font-mono text-4xl font-semibold tracking-tight">{minutes}:{rest}</p><p className="mt-1 text-xs text-slate-400">{focus ? "25分集中 + 5分休憩" : "気分をリセットしましょう"}</p></div><div className="flex gap-2"><Button size="icon" className="rounded-full bg-white text-slate-950 hover:bg-slate-200" onClick={toggleRunning}>{running ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button><Button size="icon" variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10" onClick={() => { setRunning(false); setEndAt(null); setFocus(true); setSeconds(25 * 60); }}><TimerReset className="h-4 w-4" /></Button></div></CardContent></Card>;
+  return <Card className="overflow-hidden border-0 bg-slate-900 text-white shadow-lg"><CardContent className="flex items-center justify-between p-5"><div><div className="mb-1 flex items-center gap-2 text-xs text-slate-300"><AlarmClock className="h-4 w-4 text-amber-300" />{focus ? "集中タイム" : "休憩タイム"}</div><p className="font-mono text-4xl font-semibold tracking-tight">{minutes}:{rest}</p><p className="mt-1 text-xs text-slate-400">{focus ? "25分集中 + 5分休憩" : "気分をリセットしましょう"}</p><label className="mt-2 flex items-center gap-2 text-[11px] text-slate-300"><Checkbox checked={persistent} onCheckedChange={value => setPersistent(value === true)} className="h-3.5 w-3.5 border-slate-500 data-[state=checked]:border-emerald-400 data-[state=checked]:bg-emerald-500" />他のタブでも表示し続ける</label></div><div className="flex gap-2"><Button size="icon" className="rounded-full bg-white text-slate-950 hover:bg-slate-200" onClick={toggleRunning}>{running ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button><Button size="icon" variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10" onClick={() => { setRunning(false); setEndAt(null); setFocus(true); setSeconds(25 * 60); }}><TimerReset className="h-4 w-4" /></Button></div></CardContent></Card>;
 }
 function HomePage({ pin, category, data }: { pin: string; category: Category; data: any }) {
   const { theme, toggleTheme } = useTheme();
@@ -376,6 +401,7 @@ function StudyShell({ pin, onLogout, initialPage = "home" }: { pin: string; onLo
   const [category, setCategory] = useState<Category>("english");
   const [cachedData, setCachedData] = useState<any>(null);
   const [online, setOnline] = useState(() => navigator.onLine);
+  const [timerBarActive, setTimerBarActive] = useState(() => { const saved = readPomodoroState(); return Boolean(saved.persistent && saved.running && saved.endAt > Date.now()); });
   const dashboard = trpc.learning.dashboard.useQuery({ pin, category });
   useEffect(() => {
     const cacheKey = `tonan-dashboard-${pin}-${category}`;
@@ -390,6 +416,7 @@ function StudyShell({ pin, onLogout, initialPage = "home" }: { pin: string; onLo
     setCachedData(dashboard.data);
     try { localStorage.setItem(cacheKey, JSON.stringify(dashboard.data)); } catch { /* storage unavailable */ }
   }, [dashboard.data, pin, category]);
+  useEffect(() => { const syncTimerBar = () => { const saved = readPomodoroState(); setTimerBarActive(Boolean(saved.persistent && saved.running && saved.endAt > Date.now())); }; window.addEventListener("tonan-pomodoro-update", syncTimerBar); window.addEventListener("storage", syncTimerBar); const timer = window.setInterval(syncTimerBar, 500); return () => { window.removeEventListener("tonan-pomodoro-update", syncTimerBar); window.removeEventListener("storage", syncTimerBar); window.clearInterval(timer); }; }, []);
   useEffect(() => {
     const updateStatus = () => setOnline(navigator.onLine);
     window.addEventListener("online", updateStatus);
@@ -397,7 +424,7 @@ function StudyShell({ pin, onLogout, initialPage = "home" }: { pin: string; onLo
     return () => { window.removeEventListener("online", updateStatus); window.removeEventListener("offline", updateStatus); };
   }, []);
   const data = dashboard.data ?? cachedData;
-  return <div className="min-h-dvh bg-background text-foreground"><main className="mx-auto min-h-dvh max-w-2xl px-4 pb-24 pt-3 sm:px-6"><div className="sticky top-0 z-30 -mx-4 mb-4 bg-background/90 px-4 pb-3 pt-1 backdrop-blur sm:-mx-6 sm:px-6"><div className="mx-auto flex max-w-sm rounded-2xl bg-muted p-1">{(["english", "kanji"] as Category[]).map(item => <button key={item} onClick={() => setCategory(item)} className={cn("flex-1 rounded-xl py-2 text-sm font-semibold transition", category === item ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>{categoryLabel[item]}</button>)}</div></div>{!online && <Card className="mb-4 border-sky-400/35 bg-sky-50 dark:bg-sky-950/25"><CardContent className="p-3 text-center text-xs text-sky-800 dark:text-sky-200">オフラインモード：最後に保存した学習画面を表示しています。</CardContent></Card>}{dashboard.isLoading && !data ? <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">学習データを読み込んでいます…</CardContent></Card> : (dashboard.isError && !data) || !data ? <Card><CardContent className="p-10 text-center"><p className="text-sm text-muted-foreground">保存済みの学習データがありません。通信を確認して再度開いてください。</p><Button className="mt-4" variant="outline" onClick={() => dashboard.refetch()}>再試行</Button></CardContent></Card> : <AnimatePresence mode="wait"><motion.div key={`${page}-${category}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.18 }}>{page === "home" && <HomePage pin={pin} category={category} data={data} />}{page === "books" && <BooksPage pin={pin} category={category} data={data} />}{page === "cards" && <CardsPage pin={pin} category={category} data={data} />}{page === "admin" && <AdminPage />}</motion.div></AnimatePresence>}</main><nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur"><div className="mx-auto grid max-w-2xl grid-cols-4 px-2">{navItems.map(item => { const Icon = item.icon; return <button key={item.id} onClick={() => setPage(item.id)} className={cn("flex flex-col items-center gap-1 rounded-xl py-1.5 text-[10px] font-medium transition", page === item.id ? "text-primary" : "text-muted-foreground")}><Icon className={cn("h-5 w-5", page === item.id && "fill-primary/15")} />{item.label}</button>; })}</div></nav><button className="sr-only" onClick={onLogout}>ログアウト</button></div>;
+  return <div className="min-h-dvh bg-background text-foreground"><PersistentTimerBar /><main className={cn("mx-auto min-h-dvh max-w-2xl px-4 pb-24 sm:px-6", timerBarActive ? "pt-11" : "pt-3")}><div className={cn("sticky z-30 -mx-4 mb-4 bg-background/90 px-4 pb-3 pt-1 backdrop-blur sm:-mx-6 sm:px-6", timerBarActive ? "top-8" : "top-0")}><div className="mx-auto flex max-w-sm rounded-2xl bg-muted p-1">{(["english", "kanji"] as Category[]).map(item => <button key={item} onClick={() => setCategory(item)} className={cn("flex-1 rounded-xl py-2 text-sm font-semibold transition", category === item ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>{categoryLabel[item]}</button>)}</div></div>{!online && <Card className="mb-4 border-sky-400/35 bg-sky-50 dark:bg-sky-950/25"><CardContent className="p-3 text-center text-xs text-sky-800 dark:text-sky-200">オフラインモード：最後に保存した学習画面を表示しています。</CardContent></Card>}{dashboard.isLoading && !data ? <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">学習データを読み込んでいます…</CardContent></Card> : (dashboard.isError && !data) || !data ? <Card><CardContent className="p-10 text-center"><p className="text-sm text-muted-foreground">保存済みの学習データがありません。通信を確認して再度開いてください。</p><Button className="mt-4" variant="outline" onClick={() => dashboard.refetch()}>再試行</Button></CardContent></Card> : <AnimatePresence mode="wait"><motion.div key={`${page}-${category}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.18 }}>{page === "home" && <HomePage pin={pin} category={category} data={data} />}{page === "books" && <BooksPage pin={pin} category={category} data={data} />}{page === "cards" && <CardsPage pin={pin} category={category} data={data} />}{page === "admin" && <AdminPage />}</motion.div></AnimatePresence>}</main><nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur"><div className="mx-auto grid max-w-2xl grid-cols-4 px-2">{navItems.map(item => { const Icon = item.icon; return <button key={item.id} onClick={() => setPage(item.id)} className={cn("flex flex-col items-center gap-1 rounded-xl py-1.5 text-[10px] font-medium transition", page === item.id ? "text-primary" : "text-muted-foreground")}><Icon className={cn("h-5 w-5", page === item.id && "fill-primary/15")} />{item.label}</button>; })}</div></nav><button className="sr-only" onClick={onLogout}>ログアウト</button></div>;
 }
 
 export default function Home() {
