@@ -311,15 +311,17 @@ export async function getDayDetail(pin: string, category: StudyCategory, date: s
   const entryIds = books.length ? (await db.select({ id: wordEntries.id }).from(wordEntries).where(inArray(wordEntries.bookId, books.map(book => book.id)))).map(item => item.id) : [];
   const start = new Date(`${date}T00:00:00`);
   const end = new Date(start.getTime() + 86_400_000);
-  const [sessions, progress, dueProgress, events] = await Promise.all([
+  const [sessions, progress, dueProgress, personalEvents, managedEvents] = await Promise.all([
     db.select().from(studySessions).where(and(eq(studySessions.learnerId, learner.id), gte(studySessions.createdAt, start), lte(studySessions.createdAt, end))),
     entryIds.length ? db.select().from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), inArray(studyProgress.entryId, entryIds), gte(studyProgress.lastReviewedAt, start), lte(studyProgress.lastReviewedAt, end))) : Promise.resolve([]),
     entryIds.length ? db.select().from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), inArray(studyProgress.entryId, entryIds), gte(studyProgress.nextReviewAt, start), lte(studyProgress.nextReviewAt, end))) : Promise.resolve([]),
     db.select().from(learnerEvents).where(and(eq(learnerEvents.learnerId, learner.id), eq(learnerEvents.eventDate, date))),
+    db.select().from(calendarEvents).where(eq(calendarEvents.eventDate, date)),
   ]);
+  const visibleCalendarEvents = managedEvents.filter((item: { category: string }) => item.category === "both" || item.category === category);
   const learned = progress.filter(item => item.correctCount > 0).length;
   const retention = progress.length ? Math.round(progress.reduce((sum, item) => sum + item.strength, 0) / progress.length) : 0;
-  return { date, totalSeconds: sessions.reduce((sum, item) => sum + item.seconds, 0), learned, retention, reviewDue: dueProgress.length, events };
+  return { date, totalSeconds: sessions.reduce((sum, item) => sum + item.seconds, 0), learned, retention, reviewDue: dueProgress.length, personalEvents, calendarEvents: visibleCalendarEvents };
 }
 
 export async function getDashboard(pin: string, category: StudyCategory) {
