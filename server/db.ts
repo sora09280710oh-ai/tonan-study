@@ -21,6 +21,12 @@ import { ENV } from "./_core/env";
 export type StudyCategory = "english" | "kanji";
 type EntryDraft = { front: string; back: string; writingAnswer?: string | null; importBatchId?: string | null };
 
+function appDateString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 let _db: ReturnType<typeof drizzle> | null = null;
 
 export async function getDb() {
@@ -339,7 +345,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(announcements).orderBy(desc(announcements.createdAt)).limit(5),
     db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
     db.select().from(learnerEvents).where(eq(learnerEvents.learnerId, learner.id)).orderBy(learnerEvents.eventDate),
-    db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, new Date().toISOString().slice(0, 10)), gte(recommendedTests.endDate, new Date().toISOString().slice(0, 10)))).orderBy(desc(recommendedTests.createdAt)).limit(20),
+    db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, appDateString()), gte(recommendedTests.endDate, appDateString()))).orderBy(desc(recommendedTests.createdAt)).limit(20),
     db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
