@@ -188,6 +188,33 @@ export async function replacePersonalEntries(pin: string, bookId: number, entrie
   await db.update(wordBooks).set({ updatedAt: new Date() }).where(eq(wordBooks.id, bookId));
 }
 
+export async function savePersonalEntry(pin: string, input: { id?: number; bookId: number; front: string; back: string; writingAnswer?: string | null }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const book = await accessibleBook(input.bookId, learner.id);
+  if (book.kind !== "personal") throw new Error("マイ単語帳のみ編集できます");
+  if (input.id) {
+    await db.update(wordEntries).set({ front: input.front, back: input.back, writingAnswer: input.writingAnswer ?? null }).where(and(eq(wordEntries.id, input.id), eq(wordEntries.bookId, input.bookId)));
+    await db.update(wordBooks).set({ updatedAt: new Date() }).where(eq(wordBooks.id, input.bookId));
+    return input.id;
+  }
+  const last = await db.select({ entryNo: wordEntries.entryNo }).from(wordEntries).where(eq(wordEntries.bookId, input.bookId)).orderBy(desc(wordEntries.entryNo)).limit(1);
+  const created = await db.insert(wordEntries).values({ bookId: input.bookId, entryNo: (last[0]?.entryNo ?? 0) + 1, front: input.front, back: input.back, writingAnswer: input.writingAnswer ?? null }).$returningId();
+  await db.update(wordBooks).set({ updatedAt: new Date() }).where(eq(wordBooks.id, input.bookId));
+  return created[0]?.id;
+}
+
+export async function deletePersonalEntry(pin: string, bookId: number, entryId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const book = await accessibleBook(bookId, learner.id);
+  if (book.kind !== "personal") throw new Error("マイ単語帳のみ編集できます");
+  await db.delete(wordEntries).where(and(eq(wordEntries.id, entryId), eq(wordEntries.bookId, bookId)));
+  await db.update(wordBooks).set({ updatedAt: new Date() }).where(eq(wordBooks.id, bookId));
+}
+
 export async function createCardSet(pin: string, input: { bookId: number; category: StudyCategory; name: string; startNo: number; endNo: number }) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");

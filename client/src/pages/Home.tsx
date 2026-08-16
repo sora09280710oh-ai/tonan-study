@@ -42,13 +42,54 @@ function formatDuration(seconds: number) {
   return hours ? `${hours}時間${minutes}分` : `${minutes}分`;
 }
 
-function parseCsv(raw: string, category: Category) {
-  const rows = raw.replace(/^\uFEFF/, "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const first = rows[0]?.toLowerCase() ?? "";
-  const start = /単語|意味|word|meaning|漢字|読み/.test(first) ? 1 : 0;
-  return rows.slice(start).map(row => row.split(",").map(cell => cell.trim().replace(/^"|"$/g, ""))).filter(cells => cells[0] && cells[1]).map(cells => ({
-    front: cells[0], back: cells[1], writingAnswer: category === "kanji" ? cells[2] || cells[0] : null,
-  }));
+type CsvEntryDraft = { front: string; back: string; writingAnswer: string | null };
+type CsvPreview = { entries: CsvEntryDraft[]; headers: string[] };
+
+function parseCsvRow(row: string) {
+  const cells: string[] = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < row.length; index += 1) {
+    const char = row[index];
+    if (char === '"' && row[index + 1] === '"' && quoted) { value += '"'; index += 1; }
+    else if (char === '"') quoted = !quoted;
+    else if (char === "," && !quoted) { cells.push(value.trim()); value = ""; }
+    else value += char;
+  }
+  cells.push(value.trim());
+  return cells;
+}
+
+function findCsvColumn(headers: string[], names: string[]) {
+  return headers.findIndex(header => names.includes(header.trim().toLowerCase()));
+}
+
+function parseCsv(raw: string, category: Category): CsvPreview {
+  const rows = raw.replace(/^\uFEFF/, "").split(/\r?\n/).map(row => row.trim()).filter(Boolean).map(parseCsvRow);
+  if (rows.length < 2) throw new Error("見出しと1件以上の単語を含むCSVを選択してください");
+  const headers = rows[0] ?? [];
+  const leftIndex = category === "english" ? findCsvColumn(headers, ["英単語", "english", "word", "単語"]) : findCsvColumn(headers, ["漢字", "kanji"]);
+  const rightIndex = category === "english" ? findCsvColumn(headers, ["意味", "meaning", "日本語"]) : findCsvColumn(headers, ["読み", "よみ", "reading"]);
+  const writingIndex = findCsvColumn(headers, ["書き取り", "書き取り答え", "writing"]);
+  const required = category === "english" ? "英単語,意味" : "漢字,読み";
+  if (leftIndex < 0 || rightIndex < 0) throw new Error(`CSVの1行目を「${required}」にしてください`);
+  const entries = rows.slice(1).map(cells => {
+    const left = cells[leftIndex]?.trim();
+    const right = cells[rightIndex]?.trim();
+    if (!left || !right) return null;
+    return category === "english" ? { front: right, back: left, writingAnswer: null } : { front: left, back: right, writingAnswer: cells[writingIndex]?.trim() || left };
+  }).filter((entry): entry is CsvEntryDraft => Boolean(entry));
+  if (!entries.length) throw new Error("英単語と意味が両方入力された行が見つかりませんでした");
+  return { entries, headers };
+}
+
+function downloadTextFile(filename: string, content: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: "text/csv;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function daysInCurrentMonth() {
@@ -207,15 +248,26 @@ function BooksPage({ pin, category, data }: { pin: string; category: Category; d
   const utils = trpc.useUtils();
   const [selectedBook, setSelectedBook] = useState<number | null>(data.books[0]?.id ?? null);
   const [bookName, setBookName] = useState("");
+  const [csvPreview, setCsvPreview] = useState<(CsvPreview & { filename: string }) | null>(null);
+  const [entryDraft, setEntryDraft] = useState<{ id?: number; left: string; right: string }>({ left: "", right: "" });
   const entries = trpc.learning.entries.useQuery({ pin, bookId: selectedBook ?? 1 }, { enabled: Boolean(selectedBook) });
   const createBook = trpc.learning.createBook.useMutation({ onSuccess: async id => { toast.success("マイ単語帳を作成しました"); await utils.learning.books.invalidate(); await utils.learning.dashboard.invalidate(); if (id) setSelectedBook(id); setBookName(""); }, onError: error => toast.error(error.message) });
-  const importEntries = trpc.learning.importEntries.useMutation({ onSuccess: async () => { toast.success("CSVから単語を登録しました"); await utils.learning.entries.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  const importEntries = trpc.learning.importEntries.useMutation({ onSuccess: async () => { setCsvPreview(null); toast.success("CSVから単語を登録しました"); await utils.learning.entries.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  const saveEntry = trpc.learning.savePersonalEntry.useMutation({ onSuccess: async () => { setEntryDraft({ left: "", right: "" }); toast.success("単語を保存しました"); await utils.learning.entries.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  const deleteEntry = trpc.learning.deletePersonalEntry.useMutation({ onSuccess: async () => { setEntryDraft({ left: "", right: "" }); toast.success("単語を削除しました"); await utils.learning.entries.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
   const selected = data.books.find((book: { id: number }) => book.id === selectedBook);
+  const columnNames = category === "english" ? { left: "英単語", right: "意味" } : { left: "漢字", right: "読み" };
   const speak = (word: string) => { if ("speechSynthesis" in window) { window.speechSynthesis.cancel(); window.speechSynthesis.speak(new SpeechSynthesisUtterance(word)); } else toast.error("このブラウザでは音声再生に対応していません"); };
+  const downloadTemplate = () => downloadTextFile(category === "english" ? "tonan_english_template.csv" : "tonan_kanji_template.csv", category === "english" ? "\uFEFF英単語,意味\nchallenge,挑戦\neffort,努力\n" : "\uFEFF漢字,読み,書き取り答え\n挑戦,ちょうせん,挑戦\n努力,どりょく,努力\n");
+  const prepareImport = (file: File) => { const reader = new FileReader(); reader.onload = () => { try { const parsed = parseCsv(String(reader.result ?? ""), category); setCsvPreview({ ...parsed, filename: file.name }); } catch (error) { toast.error(error instanceof Error ? error.message : "CSVを確認できませんでした"); } }; reader.readAsText(file); };
+  const downloadCurrentBook = () => { if (!selected || !entries.data) return; const escape = (value: string) => `"${value.replace(/"/g, '""')}"`; const header = category === "english" ? "英単語,意味" : "漢字,読み,書き取り答え"; const rows = entries.data.map(item => category === "english" ? [item.back, item.front].map(escape).join(",") : [item.front, item.back, item.writingAnswer || item.front].map(escape).join(",")); downloadTextFile(`${selected.name.replace(/[^a-zA-Z0-9ぁ-んァ-ン一-龠_-]/g, "_")}.csv`, `\uFEFF${header}\n${rows.join("\n")}\n`); };
+  const saveDraft = () => { if (!selectedBook || !entryDraft.left.trim() || !entryDraft.right.trim()) return; const payload = category === "english" ? { front: entryDraft.right, back: entryDraft.left, writingAnswer: null } : { front: entryDraft.left, back: entryDraft.right, writingAnswer: entryDraft.left }; saveEntry.mutate({ pin, bookId: selectedBook, id: entryDraft.id, ...payload }); };
   return <div className="space-y-4 pb-2"><div className="pt-1"><p className="text-xs font-semibold tracking-wider text-primary">WORD BOOKS</p><h1 className="mt-1 text-2xl font-bold">単語帳</h1><p className="mt-1 text-sm text-muted-foreground">自分のペースで、言葉を増やしましょう。</p></div>
-    <div className="flex gap-2 overflow-x-auto pb-1">{data.books.map((book: { id: number; name: string; kind: string }) => <button key={book.id} className={cn("min-w-40 rounded-2xl border p-3 text-left transition", selectedBook === book.id ? "border-primary bg-primary text-primary-foreground shadow-md" : "bg-card")} onClick={() => setSelectedBook(book.id)}><Badge variant={book.kind === "standard" ? "secondary" : "outline"} className={cn("mb-2 text-[10px]", selectedBook === book.id && "bg-white/20 text-white")}>{book.kind === "standard" ? "標準" : "マイ単語帳"}</Badge><p className="line-clamp-1 text-sm font-semibold">{book.name}</p></button>)}</div>
-    <Card><CardHeader className="pb-3"><CardTitle className="text-base">マイ単語帳を作成</CardTitle><CardDescription>名前を設定後、CSV形式で「単語,意味」を登録できます。</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex gap-2"><Input placeholder="例：模試で間違えた単語" value={bookName} onChange={event => setBookName(event.target.value)} /><Button disabled={!bookName.trim() || createBook.isPending} onClick={() => createBook.mutate({ pin, category, name: bookName })}><Plus className="mr-1 h-4 w-4" />作成</Button></div>{selected?.kind === "personal" && <div className="rounded-xl border border-dashed p-3"><Label htmlFor="csv" className="text-sm font-medium">CSVをインポート</Label><p className="mt-1 text-xs text-muted-foreground">1行目は見出しでも省略でも可。漢字は「漢字,読み,書き取り答え」の順に指定できます。</p><Input id="csv" type="file" accept=".csv,text/csv" className="mt-3" onChange={event => { const file = event.target.files?.[0]; if (!file || !selectedBook) return; const reader = new FileReader(); reader.onload = () => { const imported = parseCsv(String(reader.result ?? ""), category); if (!imported.length) { toast.error("登録できる単語が見つかりませんでした"); return; } importEntries.mutate({ pin, bookId: selectedBook, entries: imported }); }; reader.readAsText(file); }} /></div>}</CardContent></Card>
-    <Card><CardHeader className="pb-2"><div className="flex items-center justify-between"><div><CardTitle className="text-base">{selected?.name ?? "単語を選択"}</CardTitle><CardDescription>{entries.data?.length ?? 0} 語を登録</CardDescription></div>{selected?.kind === "standard" && <Badge>閲覧のみ</Badge>}</div></CardHeader><CardContent className="divide-y">{entries.isLoading ? <p className="py-6 text-center text-sm text-muted-foreground">読み込み中…</p> : entries.data?.map(item => <div key={item.id} className="flex items-center gap-3 py-3"><span className="w-6 text-xs text-muted-foreground">{item.entryNo}</span><div className="min-w-0 flex-1"><p className="text-sm font-medium">{item.front}</p><p className="truncate text-xs text-muted-foreground">{item.back}</p></div>{category === "english" && <Button variant="ghost" size="icon" className="shrink-0 rounded-full" onClick={() => speak(item.back)} aria-label={`${item.back}を発音する`}><Volume2 className="h-4 w-4 text-primary" /></Button>}</div>)}</CardContent></Card>
+    <div className="flex gap-2 overflow-x-auto pb-1">{data.books.map((book: { id: number; name: string; kind: string }) => <button key={book.id} className={cn("min-w-40 rounded-2xl border p-3 text-left transition", selectedBook === book.id ? "border-primary bg-primary text-primary-foreground shadow-md" : "bg-card")} onClick={() => { setSelectedBook(book.id); setCsvPreview(null); setEntryDraft({ left: "", right: "" }); }}><Badge variant={book.kind === "standard" ? "secondary" : "outline"} className={cn("mb-2 text-[10px]", selectedBook === book.id && "bg-white/20 text-white")}>{book.kind === "standard" ? "標準" : "マイ単語帳"}</Badge><p className="line-clamp-1 text-sm font-semibold">{book.name}</p></button>)}</div>
+    <Card><CardHeader className="pb-3"><CardTitle className="text-base">マイ単語帳を作成</CardTitle><CardDescription>作成後、スマホのファイルアプリからCSVを選んで単語を登録できます。</CardDescription></CardHeader><CardContent className="flex gap-2"><Input placeholder="例：模試で間違えた単語" value={bookName} onChange={event => setBookName(event.target.value)} /><Button disabled={!bookName.trim() || createBook.isPending} onClick={() => createBook.mutate({ pin, category, name: bookName })}><Plus className="mr-1 h-4 w-4" />作成</Button></CardContent></Card>
+    {selected?.kind === "personal" && <Card><CardHeader className="pb-2"><div className="flex items-center justify-between gap-3"><div><CardTitle className="text-base">CSVから登録</CardTitle><CardDescription>1行目を「{columnNames.left},{columnNames.right}」にして保存してください。</CardDescription></div><Button type="button" size="sm" variant="outline" onClick={downloadTemplate}>テンプレート</Button></div></CardHeader><CardContent className="space-y-3"><Input id="csv" type="file" accept=".csv,text/csv" className="cursor-pointer" onChange={event => { const file = event.target.files?.[0]; if (file) prepareImport(file); event.currentTarget.value = ""; }} />{csvPreview && <div className="rounded-xl bg-muted/60 p-3"><div className="flex items-start justify-between gap-2"><div><p className="text-sm font-semibold">{csvPreview.entries.length}語を取り込む準備ができました</p><p className="text-xs text-muted-foreground">{csvPreview.filename} ／ {csvPreview.headers.join("・")}</p></div><Button size="sm" variant="ghost" onClick={() => setCsvPreview(null)}>取消</Button></div><div className="mt-3 max-h-28 divide-y overflow-y-auto rounded-lg border bg-background px-2">{csvPreview.entries.slice(0, 5).map((entry, index) => <div key={`${entry.back}-${index}`} className="grid grid-cols-2 gap-3 py-2 text-xs"><span className="truncate font-medium">{category === "english" ? entry.back : entry.front}</span><span className="truncate text-muted-foreground">{category === "english" ? entry.front : entry.back}</span></div>)}</div><Button className="mt-3 w-full" disabled={importEntries.isPending || !selectedBook} onClick={() => selectedBook && importEntries.mutate({ pin, bookId: selectedBook, entries: csvPreview.entries })}>この内容で取り込む</Button></div>}</CardContent></Card>}
+    {selected?.kind === "personal" && <Card><CardHeader className="pb-2"><CardTitle className="text-base">1語ずつ追加・編集</CardTitle><CardDescription>{entryDraft.id ? "編集内容を保存します。" : "CSV以外でも単語と意味を追加できます。"}</CardDescription></CardHeader><CardContent className="space-y-2"><div className="grid grid-cols-2 gap-2"><Input placeholder={columnNames.left} value={entryDraft.left} onChange={event => setEntryDraft({ ...entryDraft, left: event.target.value })} /><Input placeholder={columnNames.right} value={entryDraft.right} onChange={event => setEntryDraft({ ...entryDraft, right: event.target.value })} /></div><div className="flex gap-2"><Button className="flex-1" disabled={!entryDraft.left.trim() || !entryDraft.right.trim() || saveEntry.isPending} onClick={saveDraft}>{entryDraft.id ? "編集を保存" : "単語を追加"}</Button>{entryDraft.id && <Button variant="outline" onClick={() => setEntryDraft({ left: "", right: "" })}>取消</Button>}</div></CardContent></Card>}
+    <Card><CardHeader className="pb-2"><div className="flex items-center justify-between gap-3"><div><CardTitle className="text-base">{selected?.name ?? "単語を選択"}</CardTitle><CardDescription>{entries.data?.length ?? 0} 語を登録</CardDescription></div><div className="flex items-center gap-2">{selected?.kind === "personal" && <Button size="sm" variant="outline" onClick={downloadCurrentBook}>CSVを書き出す</Button>}{selected?.kind === "standard" && <Badge>閲覧のみ</Badge>}</div></div></CardHeader><CardContent className="divide-y">{entries.isLoading ? <p className="py-6 text-center text-sm text-muted-foreground">読み込み中…</p> : entries.data?.map(item => <div key={item.id} className="flex items-center gap-3 py-3"><span className="w-6 text-xs text-muted-foreground">{item.entryNo}</span><div className="min-w-0 flex-1"><p className="text-sm font-medium">{category === "english" ? item.back : item.front}</p><p className="truncate text-xs text-muted-foreground">{category === "english" ? item.front : item.back}</p></div>{category === "english" && <Button variant="ghost" size="icon" className="shrink-0 rounded-full" onClick={() => speak(item.back)} aria-label={`${item.back}を発音する`}><Volume2 className="h-4 w-4 text-primary" /></Button>}{selected?.kind === "personal" && <div className="flex shrink-0 gap-1"><Button variant="ghost" size="sm" onClick={() => setEntryDraft({ id: item.id, left: category === "english" ? item.back : item.front, right: category === "english" ? item.front : item.back })}>編集</Button><Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" aria-label={`${item.front}を削除`} onClick={() => selectedBook && deleteEntry.mutate({ pin, bookId: selectedBook, entryId: item.id })}><X className="h-4 w-4" /></Button></div>}</div>)}</CardContent></Card>
   </div>;
 }
 
