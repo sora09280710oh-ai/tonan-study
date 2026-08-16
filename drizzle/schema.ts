@@ -108,6 +108,14 @@ export const calendarEvents = mysqlTable("calendarEvents", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [index("calendarEvents_date_idx").on(table.eventDate)]);
 
+export const learnerEvents = mysqlTable("learnerEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  eventDate: varchar("eventDate", { length: 10 }).notNull(),
+  title: varchar("title", { length: 160 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [index("learnerEvents_learner_date_idx").on(table.learnerId, table.eventDate)]);
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Learner = typeof learners.$inferSelect;

@@ -3,7 +3,9 @@ import { z } from "zod";
 import {
   addCalendarEvent,
   createCardSet,
+  createLearnerEvent,
   createPersonalBook,
+  deleteLearnerEvent,
   getAdminOverview,
   getDashboard,
   getWordEntries,
@@ -48,6 +50,8 @@ export const appRouter = router({
     recordReview: publicProcedure.input(z.object({ pin, entryId: z.number().int().positive(), correct: z.boolean(), seconds: z.number().int().min(1).max(3600).optional() })).mutation(({ input }) => recordReview(input.pin, input.entryId, input.correct, input.seconds)),
     recordTimer: publicProcedure.input(z.object({ pin, seconds: z.number().int().min(1).max(7200) })).mutation(({ input }) => recordTimerSession(input.pin, input.seconds)),
     useRevivalTicket: publicProcedure.input(z.object({ pin })).mutation(({ input }) => useRevivalTicket(input.pin)),
+    createPersonalEvent: publicProcedure.input(z.object({ pin, eventDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), title: z.string().trim().min(1).max(160) })).mutation(({ input }) => createLearnerEvent(input.pin, input)),
+    deletePersonalEvent: publicProcedure.input(z.object({ pin, eventId: z.number().int().positive() })).mutation(({ input }) => deleteLearnerEvent(input.pin, input.eventId)),
   }),
   admin: router({
     verify: publicProcedure.input(z.object({ password: z.string() })).mutation(({ input }) => verifyAdminPassword(input.password)),

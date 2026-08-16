@@ -1,0 +1,10 @@
+{
+  "name": "Tonan Study",
+  "short_name": "Tonan Study",
+  "description": "英単語と漢字を学ぶためのモバイル学習アプリ",
+  "lang": "ja",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#0f766e"
+}

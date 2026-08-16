@@ -1,10 +1,11 @@
-import { and, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createHash } from "node:crypto";
 import {
   announcements,
   calendarEvents,
   cardSets,
+  learnerEvents,
   learners,
   recommendedTests,
   studyProgress,
@@ -240,20 +241,38 @@ export async function useRevivalTicket(pin: string) {
   return revivalTickets;
 }
 
+export async function createLearnerEvent(pin: string, input: { eventDate: string; title: string }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const created = await db.insert(learnerEvents).values({ learnerId: learner.id, ...input }).$returningId();
+  return created[0]?.id;
+}
+
+export async function deleteLearnerEvent(pin: string, eventId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  await db.delete(learnerEvents).where(and(eq(learnerEvents.id, eventId), eq(learnerEvents.learnerId, learner.id)));
+}
+
 export async function getDashboard(pin: string, category: StudyCategory) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
   const books = await listAccessibleWordBooks(pin, category);
   const bookIds = books.map(book => book.id);
-  const [entries, progress, sessions, cardSetList, announcementList, events, recommendations] = await Promise.all([
+  const activeSince = new Date(Date.now() - 15 * 60_000);
+  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)) : Promise.resolve([]),
     db.select().from(studyProgress).where(eq(studyProgress.learnerId, learner.id)),
     db.select().from(studySessions).where(eq(studySessions.learnerId, learner.id)).orderBy(desc(studySessions.createdAt)),
     db.select().from(cardSets).where(and(eq(cardSets.learnerId, learner.id), eq(cardSets.category, category))).orderBy(desc(cardSets.createdAt)),
     db.select().from(announcements).orderBy(desc(announcements.createdAt)).limit(5),
     db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
+    db.select().from(learnerEvents).where(eq(learnerEvents.learnerId, learner.id)).orderBy(learnerEvents.eventDate),
     db.select().from(recommendedTests).where(eq(recommendedTests.category, category)).orderBy(desc(recommendedTests.createdAt)),
+    db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
   const relevantProgress = progress.filter(item => entryIds.has(item.entryId));
@@ -269,8 +288,9 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     sessions,
     announcements: announcementList,
     events,
+    personalEvents,
     recommendations,
-    stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due },
+    stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
   };
 }
 

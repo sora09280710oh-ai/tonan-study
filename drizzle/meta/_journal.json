@@ -15,6 +15,13 @@
       "when": 1786888828002,
       "tag": "0001_optimal_alex_power",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1786891301307,
+      "tag": "0002_legal_blue_blade",
+      "breakpoints": true
     }
   ]
 }
