@@ -339,7 +339,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(announcements).orderBy(desc(announcements.createdAt)).limit(5),
     db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
     db.select().from(learnerEvents).where(eq(learnerEvents.learnerId, learner.id)).orderBy(learnerEvents.eventDate),
-    db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, new Date().toISOString().slice(0, 10)), gte(recommendedTests.endDate, new Date().toISOString().slice(0, 10)))).orderBy(desc(recommendedTests.createdAt)),
+    db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, new Date().toISOString().slice(0, 10)), gte(recommendedTests.endDate, new Date().toISOString().slice(0, 10)))).orderBy(desc(recommendedTests.createdAt)).limit(20),
     db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
@@ -470,8 +470,9 @@ export async function publishRecommendedTest(password: string, input: { title: s
   await requireAdminPassword(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(recommendedTests).values(input);
-  await db.insert(announcements).values({ title: `おすすめテスト：${input.title}`, body: `${input.startDate}〜${input.endDate}に受講できるおすすめテストを配信しました。` });
+  const inserted = await db.insert(recommendedTests).values(input);
+  const recommendationId = Number(inserted[0]?.insertId);
+  await db.insert(announcements).values({ title: `おすすめテスト：${input.title}`, body: `${input.startDate}〜${input.endDate}に受講できるおすすめテストを配信しました。 [recommendation:${recommendationId}]` });
 }
 
 export async function addCalendarEvent(password: string, input: { eventDate: string; title: string; category: "english" | "kanji" | "both" }) {
