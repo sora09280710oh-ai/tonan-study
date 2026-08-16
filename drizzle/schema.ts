@@ -74,6 +74,7 @@ export const studyProgress = mysqlTable("studyProgress", {
   entryId: int("entryId").notNull(),
   strength: int("strength").notNull().default(0),
   correctCount: int("correctCount").notNull().default(0),
+  incorrectCount: int("incorrectCount").notNull().default(0),
   lastReviewedAt: timestamp("lastReviewedAt"),
   nextReviewAt: timestamp("nextReviewAt"),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

@@ -237,17 +237,19 @@ export async function recordReview(pin: string, entryId: number, correct: boolea
   const learner = await learnerForPin(pin);
   const previous = await db.select().from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), eq(studyProgress.entryId, entryId))).limit(1);
   const current = previous[0];
-  const correctCount = correct ? (current?.correctCount ?? 0) + 1 : 0;
+  const correctCount = (current?.correctCount ?? 0) + (correct ? 1 : 0);
+  const incorrectCount = (current?.incorrectCount ?? 0) + (correct ? 0 : 1);
   const strength = nextStrength(current?.strength ?? 0, correct);
   const now = new Date();
   await db.insert(studyProgress).values({
     learnerId: learner.id,
     entryId,
     correctCount,
+    incorrectCount,
     strength,
     lastReviewedAt: now,
     nextReviewAt: nextReviewDate(correct ? correctCount - 1 : 0, correct, now),
-  }).onDuplicateKeyUpdate({ set: { correctCount, strength, lastReviewedAt: now, nextReviewAt: nextReviewDate(correct ? correctCount - 1 : 0, correct, now) } });
+  }).onDuplicateKeyUpdate({ set: { correctCount, incorrectCount, strength, lastReviewedAt: now, nextReviewAt: nextReviewDate(correct ? correctCount - 1 : 0, correct, now) } });
   await db.insert(studySessions).values({ learnerId: learner.id, seconds: Math.max(1, seconds) });
 }
 
@@ -317,6 +319,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     events,
     personalEvents,
     recommendations,
+    mistakeEntryIds: relevantProgress.filter(item => item.incorrectCount > 0).sort((left, right) => right.incorrectCount - left.incorrectCount).map(item => item.entryId),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
   };
 }

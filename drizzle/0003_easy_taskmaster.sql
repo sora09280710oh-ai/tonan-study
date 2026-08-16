@@ -1,0 +1,1 @@
+ALTER TABLE `studyProgress` ADD `incorrectCount` int DEFAULT 0 NOT NULL;
