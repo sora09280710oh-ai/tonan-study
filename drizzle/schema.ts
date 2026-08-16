@@ -98,6 +98,8 @@ export const recommendedTests = mysqlTable("recommendedTests", {
   startNo: int("startNo").notNull(),
   endNo: int("endNo").notNull(),
   questionCount: int("questionCount").notNull().default(10),
+  startDate: varchar("startDate", { length: 10 }).notNull(),
+  endDate: varchar("endDate", { length: 10 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 

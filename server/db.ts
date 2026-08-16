@@ -215,6 +215,24 @@ export async function deletePersonalEntry(pin: string, bookId: number, entryId: 
   await db.update(wordBooks).set({ updatedAt: new Date() }).where(eq(wordBooks.id, bookId));
 }
 
+export async function deletePersonalBook(pin: string, bookId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const book = await accessibleBook(bookId, learner.id);
+  if (book.kind !== "personal" || book.ownerId !== learner.id) throw new Error("マイ単語帳のみ削除できます");
+  await db.delete(cardSets).where(and(eq(cardSets.bookId, bookId), eq(cardSets.learnerId, learner.id)));
+  await db.delete(wordEntries).where(eq(wordEntries.bookId, bookId));
+  await db.delete(wordBooks).where(and(eq(wordBooks.id, bookId), eq(wordBooks.ownerId, learner.id)));
+}
+
+export async function deleteCardSet(pin: string, cardSetId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  await db.delete(cardSets).where(and(eq(cardSets.id, cardSetId), eq(cardSets.learnerId, learner.id)));
+}
+
 export async function createCardSet(pin: string, input: { bookId: number; category: StudyCategory; name: string; startNo: number; endNo: number }) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -285,6 +303,24 @@ export async function deleteLearnerEvent(pin: string, eventId: number) {
   await db.delete(learnerEvents).where(and(eq(learnerEvents.id, eventId), eq(learnerEvents.learnerId, learner.id)));
 }
 
+export async function getDayDetail(pin: string, category: StudyCategory, date: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const books = await listAccessibleWordBooks(pin, category);
+  const entryIds = books.length ? (await db.select({ id: wordEntries.id }).from(wordEntries).where(inArray(wordEntries.bookId, books.map(book => book.id)))).map(item => item.id) : [];
+  const start = new Date(`${date}T00:00:00`);
+  const end = new Date(start.getTime() + 86_400_000);
+  const [sessions, progress, events] = await Promise.all([
+    db.select().from(studySessions).where(and(eq(studySessions.learnerId, learner.id), gte(studySessions.createdAt, start), lte(studySessions.createdAt, end))),
+    entryIds.length ? db.select().from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), inArray(studyProgress.entryId, entryIds), gte(studyProgress.lastReviewedAt, start), lte(studyProgress.lastReviewedAt, end))) : Promise.resolve([]),
+    db.select().from(learnerEvents).where(and(eq(learnerEvents.learnerId, learner.id), eq(learnerEvents.eventDate, date))),
+  ]);
+  const learned = progress.filter(item => item.correctCount > 0).length;
+  const retention = progress.length ? Math.round(progress.reduce((sum, item) => sum + item.strength, 0) / progress.length) : 0;
+  return { date, totalSeconds: sessions.reduce((sum, item) => sum + item.seconds, 0), learned, retention, events };
+}
+
 export async function getDashboard(pin: string, category: StudyCategory) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -300,7 +336,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(announcements).orderBy(desc(announcements.createdAt)).limit(5),
     db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
     db.select().from(learnerEvents).where(eq(learnerEvents.learnerId, learner.id)).orderBy(learnerEvents.eventDate),
-    db.select().from(recommendedTests).where(eq(recommendedTests.category, category)).orderBy(desc(recommendedTests.createdAt)),
+    db.select().from(recommendedTests).where(and(eq(recommendedTests.category, category), lte(recommendedTests.startDate, new Date().toISOString().slice(0, 10)), gte(recommendedTests.endDate, new Date().toISOString().slice(0, 10)))).orderBy(desc(recommendedTests.createdAt)),
     db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
@@ -348,6 +384,24 @@ export async function getAdminOverview(password: string) {
   return { books, entries, announcements: announcementList, tests, events };
 }
 
+export async function deleteStandardEntry(password: string, entryId: number) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const entry = (await db.select({ id: wordEntries.id, bookId: wordEntries.bookId }).from(wordEntries).where(eq(wordEntries.id, entryId)).limit(1))[0];
+  if (!entry) return;
+  const book = (await db.select().from(wordBooks).where(eq(wordBooks.id, entry.bookId)).limit(1))[0];
+  if (!book || book.kind !== "standard") throw new Error("標準単語帳の単語のみ削除できます");
+  await db.delete(wordEntries).where(eq(wordEntries.id, entryId));
+}
+
+export async function deleteRecommendedTest(password: string, testId: number) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.delete(recommendedTests).where(eq(recommendedTests.id, testId));
+}
+
 export async function saveStandardEntry(password: string, input: { id?: number; bookId: number; entryNo: number; front: string; back: string; writingAnswer?: string | null }) {
   await requireAdminPassword(password);
   const db = await getDb();
@@ -369,11 +423,12 @@ export async function publishAnnouncement(password: string, title: string, body:
   await db.insert(announcements).values({ title, body });
 }
 
-export async function publishRecommendedTest(password: string, input: { title: string; category: StudyCategory; bookId: number; startNo: number; endNo: number; questionCount: number }) {
+export async function publishRecommendedTest(password: string, input: { title: string; category: StudyCategory; bookId: number; startNo: number; endNo: number; questionCount: number; startDate: string; endDate: string }) {
   await requireAdminPassword(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   await db.insert(recommendedTests).values(input);
+  await db.insert(announcements).values({ title: `おすすめテスト：${input.title}`, body: `${input.startDate}〜${input.endDate}に受講できるおすすめテストを配信しました。` });
 }
 
 export async function addCalendarEvent(password: string, input: { eventDate: string; title: string; category: "english" | "kanji" | "both" }) {
