@@ -1,33 +1,288 @@
-import { useAuth } from "@/_core/hooks/useAuth";
+import { HandwritingPad } from "@/components/HandwritingPad";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
-import { Streamdown } from 'streamdown';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { useTheme } from "@/contexts/ThemeContext";
+import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
+import { format, isSameDay, startOfMonth } from "date-fns";
+import { ja } from "date-fns/locale";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  AlarmClock, BookOpen, Brain, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList,
+  Clock3, Crown, Flame, GraduationCap, Home as HomeIcon, Leaf, LockKeyhole, MessageSquare,
+  Moon, Pause, Play, Plus, RotateCcw, Send, Settings, Sparkles, Sprout, Sun, TimerReset,
+  Volume2, X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
+import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 
-/**
- * All content in this page are only for example, replace with your own feature implementation
- * When building pages, remember your instructions in Frontend Workflow, Frontend Best Practices, Design Guide and Common Pitfalls
- */
-export default function Home() {
-  // The useAuth hook provides authentication state.
-  // To implement login/logout, call logout(), or start login from an event
-  // handler: onClick={() => startLogin()} (imported from "@/const"). Never call
-  // startLogin() during render (no href={startLogin()}) — it mints a one-time
-  // nonce cookie and must run only at the moment of navigation.
-  let { user, loading, error, isAuthenticated, logout } = useAuth();
+type Category = "english" | "kanji";
+type Page = "home" | "books" | "cards" | "admin";
+type Entry = { id: number; entryNo: number; front: string; back: string; writingAnswer: string | null };
 
-  // If theme is switchable in App.tsx, we can implement theme toggling like this:
-  // const { theme, toggleTheme } = useTheme();
+const categoryLabel: Record<Category, string> = { english: "英単語", kanji: "漢字" };
+const navItems: { id: Page; label: string; icon: typeof HomeIcon }[] = [
+  { id: "home", label: "ホーム", icon: HomeIcon },
+  { id: "books", label: "単語帳", icon: BookOpen },
+  { id: "cards", label: "単語カード", icon: ClipboardList },
+  { id: "admin", label: "管理画面", icon: Settings },
+];
 
+function formatDuration(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours ? `${hours}時間${minutes}分` : `${minutes}分`;
+}
+
+function parseCsv(raw: string, category: Category) {
+  const rows = raw.replace(/^\uFEFF/, "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const first = rows[0]?.toLowerCase() ?? "";
+  const start = /単語|意味|word|meaning|漢字|読み/.test(first) ? 1 : 0;
+  return rows.slice(start).map(row => row.split(",").map(cell => cell.trim().replace(/^"|"$/g, ""))).filter(cells => cells[0] && cells[1]).map(cells => ({
+    front: cells[0], back: cells[1], writingAnswer: category === "kanji" ? cells[2] || cells[0] : null,
+  }));
+}
+
+function daysInCurrentMonth() {
+  const now = new Date();
+  const start = startOfMonth(now);
+  const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  return Array.from({ length: start.getDay() + days }, (_, index) => index < start.getDay() ? null : new Date(now.getFullYear(), now.getMonth(), index - start.getDay() + 1));
+}
+
+function PinLogin({ onLoggedIn, onAdmin }: { onLoggedIn: (pin: string) => void; onAdmin: () => void }) {
+  const [pin, setPin] = useState("");
+  const login = trpc.learning.login.useMutation({
+    onSuccess: () => onLoggedIn(pin),
+    onError: error => toast.error(error.message),
+  });
   return (
-    <div className="min-h-screen flex flex-col">
-      <main>
-        {/* Example: lucide-react for icons */}
-        <Loader2 className="animate-spin" />
-        Example Page
-        {/* Example: Streamdown for markdown rendering */}
-        <Streamdown>Any **markdown** content</Streamdown>
-        <Button variant="default">Example Button</Button>
-      </main>
+    <div className="relative min-h-dvh overflow-hidden bg-slate-950 px-5 py-10 text-white">
+      <div className="absolute -left-24 top-0 h-72 w-72 rounded-full bg-emerald-400/20 blur-3xl" />
+      <div className="absolute -right-28 bottom-4 h-80 w-80 rounded-full bg-sky-400/20 blur-3xl" />
+      <div className="relative mx-auto flex min-h-[80dvh] max-w-sm flex-col justify-center">
+        <div className="mb-10">
+          <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-400/20"><Sprout className="h-7 w-7" /></div>
+          <p className="text-sm font-medium tracking-[0.24em] text-emerald-300">TONAN STUDY</p>
+          <h1 className="mt-2 text-4xl font-bold tracking-tight">今日の一歩を、<br />未来の力に。</h1>
+          <p className="mt-4 leading-6 text-slate-300">4桁のPINコードで学習をはじめます。PINごとに、あなたの学習記録が保存されます。</p>
+        </div>
+        <Card className="border-white/10 bg-white/10 text-white shadow-2xl backdrop-blur-xl">
+          <CardHeader className="pb-3"><CardTitle className="text-lg">PINコードを入力</CardTitle><CardDescription className="text-slate-300">初めての番号は新しい学習者として登録されます。</CardDescription></CardHeader>
+          <CardContent className="space-y-5">
+            <div className="flex justify-center" onPaste={event => event.preventDefault()}>
+              <InputOTP maxLength={4} value={pin} onChange={setPin} onComplete={() => undefined} inputMode="numeric">
+                <InputOTPGroup>{[0, 1, 2, 3].map(index => <InputOTPSlot key={index} index={index} className="border-white/20 bg-slate-900/50 text-xl text-white" />)}</InputOTPGroup>
+              </InputOTP>
+            </div>
+            <Button className="w-full bg-emerald-400 text-slate-950 hover:bg-emerald-300" size="lg" disabled={pin.length !== 4 || login.isPending} onClick={() => login.mutate({ pin })}>{login.isPending ? "確認中…" : "学習をはじめる"}</Button>
+            <Button className="w-full text-slate-200 hover:bg-white/10" variant="ghost" onClick={onAdmin}><LockKeyhole className="mr-2 h-4 w-4" />管理画面へ</Button>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
+}
+
+function CalendarGrid({ sessions, events }: { sessions: { createdAt: Date }[]; events: { eventDate: string; title: string }[] }) {
+  const days = daysInCurrentMonth();
+  const sessionDays = new Set(sessions.map(item => format(new Date(item.createdAt), "yyyy-MM-dd")));
+  const today = new Date();
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between"><div><p className="font-semibold">{format(today, "yyyy年 M月", { locale: ja })}</p><p className="text-xs text-muted-foreground">学習した日は草が育ちます</p></div><Leaf className="h-5 w-5 text-emerald-500" /></div>
+      <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-muted-foreground">{["日", "月", "火", "水", "木", "金", "土"].map(day => <span key={day}>{day}</span>)}</div>
+      <div className="mt-1 grid grid-cols-7 gap-1">{days.map((date, index) => {
+        if (!date) return <div key={`blank-${index}`} />;
+        const key = format(date, "yyyy-MM-dd");
+        const learned = sessionDays.has(key);
+        const event = events.find(item => item.eventDate === key);
+        return <div key={key} className={cn("relative flex aspect-square flex-col items-center justify-center rounded-xl text-xs", isSameDay(date, today) ? "ring-2 ring-primary/60" : "", learned ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : "bg-muted/55")}>{learned ? <Sprout className="h-4 w-4" /> : <span>{date.getDate()}</span>}{event && <span className="absolute bottom-1 h-1 w-1 rounded-full bg-amber-500" title={event.title} />}</div>;
+      })}</div>
+    </div>
+  );
+}
+
+function Pomodoro({ pin }: { pin: string }) {
+  const [seconds, setSeconds] = useState(25 * 60);
+  const [running, setRunning] = useState(false);
+  const [focus, setFocus] = useState(true);
+  const record = trpc.learning.recordTimer.useMutation();
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => setSeconds(value => value > 0 ? value - 1 : 0), 1000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+  useEffect(() => {
+    if (seconds !== 0) return;
+    setRunning(false);
+    if (focus) {
+      record.mutate({ pin, seconds: 25 * 60 });
+      toast.success("集中時間を記録しました。5分休憩しましょう。");
+      setFocus(false); setSeconds(5 * 60);
+    } else { toast.success("休憩終了。もう一度集中しましょう。"); setFocus(true); setSeconds(25 * 60); }
+  }, [seconds, focus, pin]);
+  const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const rest = String(seconds % 60).padStart(2, "0");
+  return <Card className="overflow-hidden border-0 bg-slate-900 text-white shadow-lg"><CardContent className="flex items-center justify-between p-5"><div><div className="mb-1 flex items-center gap-2 text-xs text-slate-300"><AlarmClock className="h-4 w-4 text-amber-300" />{focus ? "集中タイム" : "休憩タイム"}</div><p className="font-mono text-4xl font-semibold tracking-tight">{minutes}:{rest}</p><p className="mt-1 text-xs text-slate-400">{focus ? "25分集中 + 5分休憩" : "気分をリセットしましょう"}</p></div><div className="flex gap-2"><Button size="icon" className="rounded-full bg-white text-slate-950 hover:bg-slate-200" onClick={() => setRunning(value => !value)}>{running ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button><Button size="icon" variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10" onClick={() => { setRunning(false); setFocus(true); setSeconds(25 * 60); }}><TimerReset className="h-4 w-4" /></Button></div></CardContent></Card>;
+}
+
+function HomePage({ pin, category, data }: { pin: string; category: Category; data: any }) {
+  const { theme, toggleTheme } = useTheme();
+  const utils = trpc.useUtils();
+  const [examDate, setExamDate] = useState(() => localStorage.getItem("tonan-exam-date") ?? "");
+  const total = data.stats.total as number;
+  const learned = data.stats.learned as number;
+  const countdown = useMemo(() => {
+    if (!examDate) return null;
+    const remaining = Math.max(0, Math.ceil((new Date(`${examDate}T00:00:00`).getTime() - new Date().setHours(0, 0, 0, 0)) / 86_400_000));
+    return { days: remaining, perDay: remaining ? Math.ceil(Math.max(0, total - learned) / remaining) : Math.max(0, total - learned) };
+  }, [examDate, total, learned]);
+  const chartData = useMemo(() => Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(); date.setDate(date.getDate() - (6 - index));
+    const key = format(date, "M/d");
+    const value = data.sessions.filter((item: { createdAt: Date; seconds: number }) => format(new Date(item.createdAt), "M/d") === key).reduce((sum: number, item: { seconds: number }) => sum + item.seconds, 0);
+    return { day: key, minutes: Math.round(value / 60) };
+  }), [data.sessions]);
+  const permitNotifications = async () => {
+    if (!("Notification" in window)) { toast.error("このブラウザでは通知に対応していません"); return; }
+    const result = await Notification.requestPermission();
+    toast[result === "granted" ? "success" : "error"](result === "granted" ? "復習通知を許可しました" : "通知は許可されませんでした");
+  };
+  const useTicket = trpc.learning.useRevivalTicket.useMutation({
+    onSuccess: async remaining => {
+      toast.success(`復活チケットを使いました。残り${remaining}枚です。`);
+      await utils.learning.dashboard.invalidate();
+    },
+    onError: error => toast.error(error.message),
+  });
+  useEffect(() => {
+    if (data.stats.due > 0 && "Notification" in window && Notification.permission === "granted") new Notification("Tonan Study", { body: `${data.stats.due}件の復習カードが待っています。` });
+  }, [data.stats.due]);
+  return <div className="space-y-4 pb-2">
+    <div className="flex items-start justify-between pt-1"><div><p className="text-xs font-semibold tracking-wider text-primary">{categoryLabel[category]} LEARNING</p><h1 className="mt-1 text-2xl font-bold tracking-tight">おかえりなさい。</h1><p className="mt-1 text-sm text-muted-foreground">今日の小さな積み重ねが、力になります。</p></div><Button variant="outline" size="icon" className="rounded-full" onClick={toggleTheme}>{theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</Button></div>
+    {data.stats.due > 0 && <Card className="border-amber-300/60 bg-amber-50 dark:bg-amber-950/25"><CardContent className="flex items-center gap-3 p-4"><RotateCcw className="h-5 w-5 text-amber-600" /><div className="flex-1"><p className="text-sm font-semibold">復習のタイミングです</p><p className="text-xs text-muted-foreground">{data.stats.due}件のカードがSRS復習予定です。</p></div><Button size="sm" variant="outline" onClick={permitNotifications}>通知</Button></CardContent></Card>}
+    <Pomodoro pin={pin} />
+    <div className="grid grid-cols-3 gap-2"><Card><CardContent className="p-3"><Clock3 className="mb-2 h-4 w-4 text-sky-500" /><p className="text-lg font-bold">{formatDuration(data.stats.totalSeconds)}</p><p className="text-[10px] text-muted-foreground">総学習時間</p></CardContent></Card><Card><CardContent className="p-3"><Brain className="mb-2 h-4 w-4 text-violet-500" /><p className="text-lg font-bold">{data.stats.retention}%</p><p className="text-[10px] text-muted-foreground">記憶定着率</p></CardContent></Card><Card><CardContent className="p-3"><Flame className="mb-2 h-4 w-4 text-orange-500" /><p className="text-lg font-bold">{data.stats.streak}日</p><p className="text-[10px] text-muted-foreground">連続学習</p></CardContent></Card></div>
+    {data.stats.streak === 0 && data.learner.revivalTickets > 0 && <Card className="border-sky-400/30 bg-sky-50/70 dark:bg-sky-950/25"><CardContent className="flex items-center gap-3 p-4"><Sparkles className="h-5 w-5 text-sky-600" /><div className="flex-1"><p className="text-sm font-semibold">ストリーク復活チケット</p><p className="text-xs text-muted-foreground">学習が途切れそうな時のために、残り{data.learner.revivalTickets}枚あります。</p></div><Button size="sm" variant="outline" disabled={useTicket.isPending} onClick={() => useTicket.mutate({ pin })}>使う</Button></CardContent></Card>}
+    <Card><CardContent className="p-4"><CalendarGrid sessions={data.sessions} events={data.events} /></CardContent></Card>
+    <Card><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><Sparkles className="h-4 w-4 text-violet-500" />直近7日間の学習</CardTitle></CardHeader><CardContent className="h-36 px-0 pb-1"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 8, right: 12, left: -24, bottom: 0 }}><defs><linearGradient id="study" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.35} /><stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} /></linearGradient></defs><XAxis dataKey="day" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} /><Tooltip /><Area type="monotone" dataKey="minutes" stroke="hsl(var(--primary))" fill="url(#study)" strokeWidth={2} /></AreaChart></ResponsiveContainer></CardContent></Card>
+    <Card className="border-emerald-500/20 bg-emerald-50/70 dark:bg-emerald-950/20"><CardContent className="p-4"><div className="flex items-center gap-2"><GraduationCap className="h-5 w-5 text-emerald-600" /><div className="flex-1"><p className="font-semibold">試験日カウントダウン</p><p className="text-xs text-muted-foreground">残り単語数から一日あたりの目標を計算します。</p></div></div><Input type="date" value={examDate} onChange={event => { setExamDate(event.target.value); localStorage.setItem("tonan-exam-date", event.target.value); }} className="mt-3 bg-background" />{countdown && <div className="mt-3 flex items-end justify-between"><div><p className="text-sm text-muted-foreground">試験まで</p><p className="text-2xl font-bold">あと {countdown.days} 日</p></div><div className="text-right"><p className="text-sm text-muted-foreground">今日の目標</p><p className="text-xl font-bold text-emerald-600">{countdown.perDay} 語</p></div></div>}</CardContent></Card>
+    <Card><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-base"><MessageSquare className="h-4 w-4 text-sky-500" />お知らせ</CardTitle></CardHeader><CardContent className="space-y-3">{data.announcements.length ? data.announcements.map((item: { id: number; title: string; body: string }) => <div key={item.id} className="rounded-xl bg-muted/60 p-3"><p className="text-sm font-semibold">{item.title}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{item.body}</p></div>) : <p className="py-2 text-center text-sm text-muted-foreground">お知らせはまだありません。</p>}</CardContent></Card>
+  </div>;
+}
+
+function BooksPage({ pin, category, data }: { pin: string; category: Category; data: any }) {
+  const utils = trpc.useUtils();
+  const [selectedBook, setSelectedBook] = useState<number | null>(data.books[0]?.id ?? null);
+  const [bookName, setBookName] = useState("");
+  const entries = trpc.learning.entries.useQuery({ pin, bookId: selectedBook ?? 1 }, { enabled: Boolean(selectedBook) });
+  const createBook = trpc.learning.createBook.useMutation({ onSuccess: async id => { toast.success("マイ単語帳を作成しました"); await utils.learning.books.invalidate(); await utils.learning.dashboard.invalidate(); if (id) setSelectedBook(id); setBookName(""); }, onError: error => toast.error(error.message) });
+  const importEntries = trpc.learning.importEntries.useMutation({ onSuccess: async () => { toast.success("CSVから単語を登録しました"); await utils.learning.entries.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  const selected = data.books.find((book: { id: number }) => book.id === selectedBook);
+  const speak = (word: string) => { if ("speechSynthesis" in window) { window.speechSynthesis.cancel(); window.speechSynthesis.speak(new SpeechSynthesisUtterance(word)); } else toast.error("このブラウザでは音声再生に対応していません"); };
+  return <div className="space-y-4 pb-2"><div className="pt-1"><p className="text-xs font-semibold tracking-wider text-primary">WORD BOOKS</p><h1 className="mt-1 text-2xl font-bold">単語帳</h1><p className="mt-1 text-sm text-muted-foreground">自分のペースで、言葉を増やしましょう。</p></div>
+    <div className="flex gap-2 overflow-x-auto pb-1">{data.books.map((book: { id: number; name: string; kind: string }) => <button key={book.id} className={cn("min-w-40 rounded-2xl border p-3 text-left transition", selectedBook === book.id ? "border-primary bg-primary text-primary-foreground shadow-md" : "bg-card")} onClick={() => setSelectedBook(book.id)}><Badge variant={book.kind === "standard" ? "secondary" : "outline"} className={cn("mb-2 text-[10px]", selectedBook === book.id && "bg-white/20 text-white")}>{book.kind === "standard" ? "標準" : "マイ単語帳"}</Badge><p className="line-clamp-1 text-sm font-semibold">{book.name}</p></button>)}</div>
+    <Card><CardHeader className="pb-3"><CardTitle className="text-base">マイ単語帳を作成</CardTitle><CardDescription>名前を設定後、CSV形式で「単語,意味」を登録できます。</CardDescription></CardHeader><CardContent className="space-y-3"><div className="flex gap-2"><Input placeholder="例：模試で間違えた単語" value={bookName} onChange={event => setBookName(event.target.value)} /><Button disabled={!bookName.trim() || createBook.isPending} onClick={() => createBook.mutate({ pin, category, name: bookName })}><Plus className="mr-1 h-4 w-4" />作成</Button></div>{selected?.kind === "personal" && <div className="rounded-xl border border-dashed p-3"><Label htmlFor="csv" className="text-sm font-medium">CSVをインポート</Label><p className="mt-1 text-xs text-muted-foreground">1行目は見出しでも省略でも可。漢字は「漢字,読み,書き取り答え」の順に指定できます。</p><Input id="csv" type="file" accept=".csv,text/csv" className="mt-3" onChange={event => { const file = event.target.files?.[0]; if (!file || !selectedBook) return; const reader = new FileReader(); reader.onload = () => { const imported = parseCsv(String(reader.result ?? ""), category); if (!imported.length) { toast.error("登録できる単語が見つかりませんでした"); return; } importEntries.mutate({ pin, bookId: selectedBook, entries: imported }); }; reader.readAsText(file); }} /></div>}</CardContent></Card>
+    <Card><CardHeader className="pb-2"><div className="flex items-center justify-between"><div><CardTitle className="text-base">{selected?.name ?? "単語を選択"}</CardTitle><CardDescription>{entries.data?.length ?? 0} 語を登録</CardDescription></div>{selected?.kind === "standard" && <Badge>閲覧のみ</Badge>}</div></CardHeader><CardContent className="divide-y">{entries.isLoading ? <p className="py-6 text-center text-sm text-muted-foreground">読み込み中…</p> : entries.data?.map(item => <div key={item.id} className="flex items-center gap-3 py-3"><span className="w-6 text-xs text-muted-foreground">{item.entryNo}</span><div className="min-w-0 flex-1"><p className="text-sm font-medium">{item.front}</p><p className="truncate text-xs text-muted-foreground">{item.back}</p></div>{category === "english" && <Button variant="ghost" size="icon" className="shrink-0 rounded-full" onClick={() => speak(item.back)} aria-label={`${item.back}を発音する`}><Volume2 className="h-4 w-4 text-primary" /></Button>}</div>)}</CardContent></Card>
+  </div>;
+}
+
+function CardSession({ entries, category, pin, onExit }: { entries: Entry[]; category: Category; pin: string; onExit: () => void }) {
+  const [mode, setMode] = useState<"menu" | "practice" | "test" | "results">("menu");
+  const [index, setIndex] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [results, setResults] = useState<{ entry: Entry; correct: boolean }[]>([]);
+  const [answer, setAnswer] = useState("");
+  const [hasInk, setHasInk] = useState(false);
+  const [questionLimit, setQuestionLimit] = useState("all");
+  const [testEntries, setTestEntries] = useState<Entry[]>([]);
+  const [seconds, setSeconds] = useState(0);
+  const review = trpc.learning.recordReview.useMutation();
+  const touchStart = useRef<number | null>(null);
+  const current = mode === "test" ? testEntries[index] : entries[index];
+  useEffect(() => { if (mode !== "test" || seconds <= 0) return; const timer = window.setInterval(() => setSeconds(value => value - 1), 1000); return () => window.clearInterval(timer); }, [mode, seconds]);
+  useEffect(() => { if (mode === "test" && seconds === 0 && testEntries.length) setMode("results"); }, [seconds, mode, testEntries.length]);
+  const startPractice = () => { setIndex(0); setFlipped(false); setResults([]); setMode("practice"); };
+  const startTest = (source = entries) => { const count = questionLimit === "all" ? source.length : Math.min(Number(questionLimit), source.length); setTestEntries([...source].sort(() => Math.random() - 0.5).slice(0, count)); setIndex(0); setResults([]); setAnswer(""); setHasInk(false); setSeconds(count * 30); setMode("test"); };
+  const score = (correct: boolean) => { if (!current) return; review.mutate({ pin, entryId: current.id, correct }); setResults(previous => [...previous, { entry: current, correct }]); setAnswer(""); setHasInk(false); if (index + 1 >= (mode === "test" ? testEntries.length : entries.length)) setMode("results"); else { setIndex(value => value + 1); setFlipped(false); } };
+  if (!entries.length) return <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">学習する単語を選択してください。</CardContent></Card>;
+  if (mode === "menu") return <Card className="border-primary/20"><CardContent className="space-y-4 p-5"><div><p className="text-lg font-bold">{entries.length}語を学習</p><p className="text-sm text-muted-foreground">表は日本語、裏は{category === "english" ? "英語" : "読み方"}です。</p></div><Button className="w-full" size="lg" onClick={startPractice}><Sparkles className="mr-2 h-4 w-4" />練習モード</Button><div className="grid grid-cols-[1fr_auto] gap-2"><Select value={questionLimit} onValueChange={setQuestionLimit}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全問</SelectItem><SelectItem value="10">10問</SelectItem><SelectItem value="20">20問</SelectItem></SelectContent></Select><Button variant="outline" onClick={() => startTest()}><ClipboardList className="mr-1 h-4 w-4" />テスト</Button></div><p className="text-center text-xs text-muted-foreground">10問なら5分、20問なら10分の制限時間です。</p></CardContent></Card>;
+  if (mode === "results") { const correct = results.filter(item => item.correct).length; const incorrect = results.filter(item => !item.correct).map(item => item.entry); return <Card><CardContent className="space-y-5 p-6 text-center"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-950"><Check className="h-7 w-7" /></div><div><p className="text-sm text-muted-foreground">テスト結果</p><p className="text-4xl font-bold">{correct}<span className="text-lg text-muted-foreground"> / {results.length}</span></p></div><Progress value={results.length ? correct / results.length * 100 : 0} /><div className="flex gap-2"><Button variant="outline" className="flex-1" onClick={onExit}>戻る</Button>{incorrect.length > 0 && <Button className="flex-1" onClick={() => startTest(incorrect)}><RotateCcw className="mr-1 h-4 w-4" />やり直し</Button>}</div></CardContent></Card>; }
+  if (!current) return null;
+  if (mode === "practice") return <div className="space-y-4"><div className="flex items-center justify-between text-sm text-muted-foreground"><Button size="sm" variant="ghost" onClick={onExit}><ChevronLeft className="mr-1 h-4 w-4" />終了</Button><span>{index + 1} / {entries.length}</span></div><motion.button layout onTouchStart={event => { touchStart.current = event.touches[0]?.clientX ?? null; }} onTouchEnd={event => { const start = touchStart.current; const end = event.changedTouches[0]?.clientX; if (start && end && Math.abs(end - start) > 50) score(end > start); }} onClick={() => setFlipped(value => !value)} className="flex h-80 w-full flex-col items-center justify-center rounded-[2rem] bg-white p-8 text-slate-900 shadow-xl ring-1 ring-slate-200 dark:ring-slate-700"><AnimatePresence mode="wait"><motion.div key={flipped ? "back" : "front"} initial={{ opacity: 0, rotateY: -20 }} animate={{ opacity: 1, rotateY: 0 }} exit={{ opacity: 0, rotateY: 20 }} transition={{ duration: 0.18 }}><p className="text-xs font-semibold tracking-[0.2em] text-slate-400">{flipped ? (category === "english" ? "ENGLISH" : "READING") : "JAPANESE"}</p><p className="mt-5 text-center text-4xl font-bold">{flipped ? current.back : current.front}</p><p className="mt-8 text-xs text-slate-400">タップしてめくる</p></motion.div></AnimatePresence></motion.button><div className="grid grid-cols-2 gap-3"><Button variant="outline" size="lg" className="border-rose-300 text-rose-600 hover:bg-rose-50" onClick={() => score(false)}><X className="mr-2 h-5 w-5" />未覚え</Button><Button size="lg" className="bg-emerald-600 hover:bg-emerald-700" onClick={() => score(true)}><Check className="mr-2 h-5 w-5" />覚えた</Button></div><p className="text-center text-xs text-muted-foreground">左へスワイプで未覚え、右へスワイプで覚えた</p></div>;
+  const time = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  return <div className="space-y-4"><div className="flex items-center justify-between"><Button size="sm" variant="ghost" onClick={() => setMode("results")}>終了</Button><Badge variant="outline"><Clock3 className="mr-1 h-3 w-3" />{time}</Badge><span className="text-sm text-muted-foreground">{index + 1}/{testEntries.length}</span></div><Card className="overflow-hidden border-primary/20"><div className="h-1 bg-primary" /><CardContent className="p-6"><p className="text-xs font-semibold tracking-[0.2em] text-primary">QUESTION</p><p className="mt-5 text-center text-4xl font-bold">{current.front}</p><p className="mt-4 text-center text-sm text-muted-foreground">{category === "english" ? "英語で入力してください" : "下の枠に手書きで回答してください"}</p>{category === "english" ? <div className="mt-6 flex gap-2"><Input autoFocus value={answer} onChange={event => setAnswer(event.target.value)} onKeyDown={event => { if (event.key === "Enter") score(answer.trim().toLowerCase() === current.back.trim().toLowerCase()); }} placeholder="English answer" /><Button onClick={() => score(answer.trim().toLowerCase() === current.back.trim().toLowerCase())}>回答</Button></div> : <div className="mt-6 space-y-3"><HandwritingPad onChange={setHasInk} /><p className="text-center text-xs text-muted-foreground">正解は「{current.writingAnswer || current.front}」です。書き終えたら自己採点してください。</p><div className="grid grid-cols-2 gap-2"><Button variant="outline" disabled={!hasInk} onClick={() => score(false)}>もう一度</Button><Button disabled={!hasInk} onClick={() => score(true)}>正解</Button></div></div>}</CardContent></Card></div>;
+}
+
+function CardsPage({ pin, category, data }: { pin: string; category: Category; data: any }) {
+  const utils = trpc.useUtils();
+  const [bookId, setBookId] = useState<string>(String(data.books[0]?.id ?? ""));
+  const [setName, setSetName] = useState("");
+  const [fromNo, setFromNo] = useState("1");
+  const [toNo, setToNo] = useState("10");
+  const [activeSet, setActiveSet] = useState<{ bookId: number; startNo: number; endNo: number } | null>(null);
+  const selectedEntries = trpc.learning.entries.useQuery({ pin, bookId: activeSet?.bookId ?? Number(bookId) }, { enabled: Boolean(activeSet?.bookId || bookId) });
+  const create = trpc.learning.createCardSet.useMutation({ onSuccess: async () => { toast.success("単語カードを保存しました"); await utils.learning.cardSets.invalidate(); setSetName(""); }, onError: error => toast.error(error.message) });
+  const trainingEntries = (selectedEntries.data ?? []).filter(item => !activeSet || (item.entryNo >= activeSet.startNo && item.entryNo <= activeSet.endNo));
+  if (activeSet) return <div className="pb-3"><CardSession entries={trainingEntries} category={category} pin={pin} onExit={() => setActiveSet(null)} /></div>;
+  return <div className="space-y-4 pb-2"><div className="pt-1"><p className="text-xs font-semibold tracking-wider text-primary">FLASH & TEST</p><h1 className="mt-1 text-2xl font-bold">単語カード</h1><p className="mt-1 text-sm text-muted-foreground">範囲を決めて、覚える・試すを繰り返しましょう。</p></div><Card><CardHeader className="pb-3"><CardTitle className="text-base">学習セットを作る</CardTitle></CardHeader><CardContent className="space-y-3"><Input placeholder="例：Unit 1〜3" value={setName} onChange={event => setSetName(event.target.value)} /><Select value={bookId} onValueChange={setBookId}><SelectTrigger><SelectValue placeholder="単語帳を選択" /></SelectTrigger><SelectContent>{data.books.map((book: { id: number; name: string }) => <SelectItem key={book.id} value={String(book.id)}>{book.name}</SelectItem>)}</SelectContent></Select><div className="grid grid-cols-2 gap-2"><Input type="number" min="1" value={fromNo} onChange={event => setFromNo(event.target.value)} placeholder="開始No." /><Input type="number" min="1" value={toNo} onChange={event => setToNo(event.target.value)} placeholder="終了No." /></div><Button className="w-full" disabled={!setName || !bookId} onClick={() => create.mutate({ pin, category, name: setName, bookId: Number(bookId), startNo: Number(fromNo), endNo: Number(toNo) })}><Plus className="mr-2 h-4 w-4" />セットを保存</Button></CardContent></Card><div><h2 className="mb-2 text-sm font-semibold">保存済みセット</h2><div className="space-y-2">{data.cardSets.length ? data.cardSets.map((item: { id: number; name: string; bookId: number; startNo: number; endNo: number }) => <button key={item.id} className="flex w-full items-center justify-between rounded-2xl border bg-card p-4 text-left transition hover:border-primary/40" onClick={() => setActiveSet(item)}><div><p className="font-semibold">{item.name}</p><p className="mt-1 text-xs text-muted-foreground">No. {item.startNo} 〜 {item.endNo}</p></div><ChevronRight className="h-5 w-5 text-muted-foreground" /></button>) : <p className="rounded-xl border border-dashed p-5 text-center text-sm text-muted-foreground">学習セットを作成するとここに表示されます。</p>}</div></div>{data.recommendations.length > 0 && <div><h2 className="mb-2 flex items-center gap-2 text-sm font-semibold"><Crown className="h-4 w-4 text-amber-500" />おすすめテスト</h2>{data.recommendations.map((item: { id: number; title: string; bookId: number; startNo: number; endNo: number }) => <button key={item.id} onClick={() => setActiveSet(item)} className="mb-2 flex w-full items-center justify-between rounded-2xl bg-amber-50 p-4 text-left dark:bg-amber-950/30"><div><p className="font-semibold">{item.title}</p><p className="text-xs text-muted-foreground">管理者からの配信テスト</p></div><Play className="h-4 w-4 text-amber-600" /></button>)}</div>}</div>;
+}
+
+function AdminWorkspace({ password, data, loading }: { password: string; data: any; loading: boolean }) {
+  const utils = trpc.useUtils();
+  const [notice, setNotice] = useState({ title: "", body: "" });
+  const [event, setEvent] = useState({ eventDate: "", title: "", category: "both" as "english" | "kanji" | "both" });
+  const [word, setWord] = useState<{ id?: number; bookId: string; entryNo: string; front: string; back: string; writingAnswer: string }>({ bookId: "", entryNo: "", front: "", back: "", writingAnswer: "" });
+  const [recommended, setRecommended] = useState({ title: "", category: "english" as Category, bookId: "", startNo: "1", endNo: "10", questionCount: "10" });
+  const announce = trpc.admin.publishAnnouncement.useMutation({ onSuccess: async () => { setNotice({ title: "", body: "" }); toast.success("お知らせを配信しました"); await utils.admin.overview.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  const addEvent = trpc.admin.addCalendarEvent.useMutation({ onSuccess: async () => { setEvent({ eventDate: "", title: "", category: "both" }); toast.success("カレンダーイベントを追加しました"); await utils.admin.overview.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  const saveWord = trpc.admin.saveStandardEntry.useMutation({ onSuccess: async () => { setWord({ bookId: "", entryNo: "", front: "", back: "", writingAnswer: "" }); toast.success("標準単語帳を更新しました"); await utils.admin.overview.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  const publishTest = trpc.admin.publishRecommendedTest.useMutation({ onSuccess: async () => { setRecommended({ title: "", category: "english", bookId: "", startNo: "1", endNo: "10", questionCount: "10" }); toast.success("おすすめテストを配信しました"); await utils.admin.overview.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  if (loading) return <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">読み込み中…</CardContent></Card>;
+  return <div className="space-y-4 pb-2"><div className="pt-1"><p className="text-xs font-semibold tracking-wider text-primary">ADMINISTRATION</p><h1 className="mt-1 text-2xl font-bold">配信と編集</h1><p className="mt-1 text-sm text-muted-foreground">全ユーザーに共有する内容を管理します。</p></div><Card><CardHeader className="pb-3"><CardTitle className="text-base">お知らせを配信</CardTitle></CardHeader><CardContent className="space-y-2"><Input placeholder="タイトル" value={notice.title} onChange={e => setNotice({ ...notice, title: e.target.value })} /><Textarea placeholder="ホーム画面に表示するメッセージ" value={notice.body} onChange={e => setNotice({ ...notice, body: e.target.value })} /><Button className="w-full" disabled={!notice.title || !notice.body} onClick={() => announce.mutate({ password, ...notice })}><Send className="mr-2 h-4 w-4" />配信する</Button></CardContent></Card><Card><CardHeader className="pb-3"><CardTitle className="text-base">おすすめテストを配信</CardTitle><CardDescription>単語帳と範囲を選び、全ユーザーのおすすめテストに表示します。</CardDescription></CardHeader><CardContent className="space-y-2"><Input placeholder="テスト名" value={recommended.title} onChange={e => setRecommended({ ...recommended, title: e.target.value })} /><Select value={recommended.category} onValueChange={(value: Category) => setRecommended({ ...recommended, category: value, bookId: "" })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="english">英単語</SelectItem><SelectItem value="kanji">漢字</SelectItem></SelectContent></Select><Select value={recommended.bookId} onValueChange={bookId => setRecommended({ ...recommended, bookId })}><SelectTrigger><SelectValue placeholder="標準単語帳を選択" /></SelectTrigger><SelectContent>{data?.books.filter((book: { category: Category }) => book.category === recommended.category).map((book: { id: number; name: string }) => <SelectItem key={book.id} value={String(book.id)}>{book.name}</SelectItem>)}</SelectContent></Select><div className="grid grid-cols-3 gap-2"><Input type="number" min="1" value={recommended.startNo} onChange={e => setRecommended({ ...recommended, startNo: e.target.value })} /><Input type="number" min="1" value={recommended.endNo} onChange={e => setRecommended({ ...recommended, endNo: e.target.value })} /><Input type="number" min="1" value={recommended.questionCount} onChange={e => setRecommended({ ...recommended, questionCount: e.target.value })} /></div><Button className="w-full" variant="outline" disabled={!recommended.title || !recommended.bookId} onClick={() => publishTest.mutate({ password, title: recommended.title, category: recommended.category, bookId: Number(recommended.bookId), startNo: Number(recommended.startNo), endNo: Number(recommended.endNo), questionCount: Number(recommended.questionCount) })}><Crown className="mr-2 h-4 w-4" />テストを配信</Button></CardContent></Card><Card><CardHeader className="pb-3"><CardTitle className="text-base">カレンダーイベント</CardTitle></CardHeader><CardContent className="space-y-2"><Input type="date" value={event.eventDate} onChange={e => setEvent({ ...event, eventDate: e.target.value })} /><Input placeholder="例：模試の日" value={event.title} onChange={e => setEvent({ ...event, title: e.target.value })} /><Select value={event.category} onValueChange={(value: "english" | "kanji" | "both") => setEvent({ ...event, category: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="both">英単語・漢字 共通</SelectItem><SelectItem value="english">英単語</SelectItem><SelectItem value="kanji">漢字</SelectItem></SelectContent></Select><Button className="w-full" variant="outline" disabled={!event.eventDate || !event.title} onClick={() => addEvent.mutate({ password, ...event })}><CalendarDays className="mr-2 h-4 w-4" />追加する</Button></CardContent></Card><Card><CardHeader className="pb-3"><CardTitle className="text-base">2026年度標準単語帳を編集</CardTitle><CardDescription>項目を選択すると編集、新規入力では追加します。</CardDescription></CardHeader><CardContent className="space-y-2"><Select value={word.bookId} onValueChange={bookId => setWord({ ...word, bookId })}><SelectTrigger><SelectValue placeholder="標準単語帳を選択" /></SelectTrigger><SelectContent>{data?.books.map((book: { id: number; category: Category; name: string }) => <SelectItem key={book.id} value={String(book.id)}>{categoryLabel[book.category]}：{book.name}</SelectItem>)}</SelectContent></Select><div className="grid grid-cols-3 gap-2"><Input type="number" min="1" placeholder="No." value={word.entryNo} onChange={e => setWord({ ...word, entryNo: e.target.value })} /><Input className="col-span-2" placeholder="日本語・漢字" value={word.front} onChange={e => setWord({ ...word, front: e.target.value })} /></div><Input placeholder="英語・読み方" value={word.back} onChange={e => setWord({ ...word, back: e.target.value })} /><Button className="w-full" variant="outline" disabled={!word.bookId || !word.entryNo || !word.front || !word.back} onClick={() => saveWord.mutate({ password, id: word.id, bookId: Number(word.bookId), entryNo: Number(word.entryNo), front: word.front, back: word.back, writingAnswer: word.writingAnswer || null })}>{word.id ? "編集内容を保存" : <><Plus className="mr-2 h-4 w-4" />標準単語帳に追加</>}</Button><div className="max-h-48 space-y-1 overflow-y-auto pt-2">{data?.entries.filter((item: { bookId: number }) => String(item.bookId) === word.bookId).map((item: Entry & { bookId: number }) => <button key={item.id} onClick={() => setWord({ id: item.id, bookId: String(item.bookId), entryNo: String(item.entryNo), front: item.front, back: item.back, writingAnswer: item.writingAnswer ?? "" })} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-xs hover:bg-muted"><span>No.{item.entryNo} {item.front}</span><span className="text-muted-foreground">編集</span></button>)}</div></CardContent></Card></div>;
+}
+
+function AdminPage() {
+  const utils = trpc.useUtils();
+  const [password, setPassword] = useState("");
+  const [verified, setVerified] = useState(false);
+  const [notice, setNotice] = useState({ title: "", body: "" });
+  const [event, setEvent] = useState({ eventDate: "", title: "", category: "both" as "english" | "kanji" | "both" });
+  const [word, setWord] = useState({ bookId: "", entryNo: "", front: "", back: "", writingAnswer: "" });
+  const verify = trpc.admin.verify.useMutation({ onSuccess: valid => { if (valid) { setVerified(true); toast.success("管理画面を開きました"); } else toast.error("パスワードが正しくありません"); }, onError: error => toast.error(error.message) });
+  const overview = trpc.admin.overview.useQuery({ password }, { enabled: verified });
+  const announce = trpc.admin.publishAnnouncement.useMutation({ onSuccess: async () => { toast.success("お知らせを配信しました"); setNotice({ title: "", body: "" }); await utils.admin.overview.invalidate(); }, onError: error => toast.error(error.message) });
+  const addEvent = trpc.admin.addCalendarEvent.useMutation({ onSuccess: async () => { toast.success("カレンダーイベントを追加しました"); setEvent({ eventDate: "", title: "", category: "both" }); await utils.admin.overview.invalidate(); }, onError: error => toast.error(error.message) });
+  const saveWord = trpc.admin.saveStandardEntry.useMutation({ onSuccess: async () => { toast.success("標準単語帳を更新しました"); setWord({ bookId: "", entryNo: "", front: "", back: "", writingAnswer: "" }); await utils.admin.overview.invalidate(); }, onError: error => toast.error(error.message) });
+  if (!verified) return <div className="space-y-4 pb-2"><div className="pt-1"><p className="text-xs font-semibold tracking-wider text-primary">ADMINISTRATION</p><h1 className="mt-1 text-2xl font-bold">管理画面</h1></div><Card><CardHeader><CardTitle className="flex items-center gap-2"><LockKeyhole className="h-5 w-5 text-primary" />管理者認証</CardTitle><CardDescription>管理画面の操作にはパスワードが必要です。</CardDescription></CardHeader><CardContent className="space-y-3"><Input type="password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === "Enter") verify.mutate({ password }); }} placeholder="パスワード" /><Button className="w-full" onClick={() => verify.mutate({ password })}>認証して続ける</Button></CardContent></Card></div>;
+  const data = overview.data ?? { books: [], entries: [], announcements: [], tests: [], events: [] };
+  const useLegacyAdmin = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("legacyAdmin") === "1";
+  if (!useLegacyAdmin) return <AdminWorkspace password={password} data={data} loading={overview.isLoading} />;
+  return <div className="space-y-4 pb-2"><div className="pt-1"><p className="text-xs font-semibold tracking-wider text-primary">ADMINISTRATION</p><h1 className="mt-1 text-2xl font-bold">配信と編集</h1><p className="mt-1 text-sm text-muted-foreground">全ユーザーに共有する内容を管理します。</p></div>{overview.isLoading ? <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">読み込み中…</CardContent></Card> : <><Card><CardHeader className="pb-3"><CardTitle className="text-base">お知らせを配信</CardTitle></CardHeader><CardContent className="space-y-2"><Input placeholder="タイトル" value={notice.title} onChange={e => setNotice({ ...notice, title: e.target.value })} /><Textarea placeholder="ホーム画面に表示するメッセージ" value={notice.body} onChange={e => setNotice({ ...notice, body: e.target.value })} /><Button className="w-full" disabled={!notice.title || !notice.body} onClick={() => announce.mutate({ password, ...notice })}><Send className="mr-2 h-4 w-4" />配信する</Button></CardContent></Card><Card><CardHeader className="pb-3"><CardTitle className="text-base">カレンダーイベント</CardTitle></CardHeader><CardContent className="space-y-2"><Input type="date" value={event.eventDate} onChange={e => setEvent({ ...event, eventDate: e.target.value })} /><Input placeholder="例：模試の日" value={event.title} onChange={e => setEvent({ ...event, title: e.target.value })} /><Select value={event.category} onValueChange={(value: "english" | "kanji" | "both") => setEvent({ ...event, category: value })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="both">英単語・漢字 共通</SelectItem><SelectItem value="english">英単語</SelectItem><SelectItem value="kanji">漢字</SelectItem></SelectContent></Select><Button className="w-full" variant="outline" disabled={!event.eventDate || !event.title} onClick={() => addEvent.mutate({ password, ...event })}><CalendarDays className="mr-2 h-4 w-4" />追加する</Button></CardContent></Card><Card><CardHeader className="pb-3"><CardTitle className="text-base">2026年度標準単語帳に追加</CardTitle><CardDescription>標準単語帳は全ユーザーに表示されます。</CardDescription></CardHeader><CardContent className="space-y-2"><Select value={word.bookId} onValueChange={bookId => setWord({ ...word, bookId })}><SelectTrigger><SelectValue placeholder="標準単語帳を選択" /></SelectTrigger><SelectContent>{data?.books.map(book => <SelectItem key={book.id} value={String(book.id)}>{categoryLabel[book.category]}：{book.name}</SelectItem>)}</SelectContent></Select><div className="grid grid-cols-3 gap-2"><Input type="number" min="1" placeholder="No." value={word.entryNo} onChange={e => setWord({ ...word, entryNo: e.target.value })} /><Input className="col-span-2" placeholder={"日本語・漢字"} value={word.front} onChange={e => setWord({ ...word, front: e.target.value })} /></div><Input placeholder="英語・読み方" value={word.back} onChange={e => setWord({ ...word, back: e.target.value })} /><Button className="w-full" variant="outline" disabled={!word.bookId || !word.entryNo || !word.front || !word.back} onClick={() => saveWord.mutate({ password, bookId: Number(word.bookId), entryNo: Number(word.entryNo), front: word.front, back: word.back, writingAnswer: word.writingAnswer || null })}><Plus className="mr-2 h-4 w-4" />標準単語帳に追加</Button></CardContent></Card><Card><CardHeader className="pb-2"><CardTitle className="text-base">現在のお知らせ</CardTitle></CardHeader><CardContent className="space-y-2">{data?.announcements.length ? data.announcements.slice(0, 4).map(item => <div key={item.id} className="rounded-xl bg-muted p-3"><p className="text-sm font-semibold">{item.title}</p><p className="mt-1 text-xs text-muted-foreground">{item.body}</p></div>) : <p className="text-sm text-muted-foreground">まだ配信されていません。</p>}</CardContent></Card></>}</div>;
+}
+
+function StudyShell({ pin, onLogout, initialPage = "home" }: { pin: string; onLogout: () => void; initialPage?: Page }) {
+  const [page, setPage] = useState<Page>(initialPage);
+  const [category, setCategory] = useState<Category>("english");
+  const dashboard = trpc.learning.dashboard.useQuery({ pin, category });
+  const data = dashboard.data;
+  return <div className="min-h-dvh bg-background text-foreground"><main className="mx-auto min-h-dvh max-w-2xl px-4 pb-24 pt-3 sm:px-6"><div className="sticky top-0 z-30 -mx-4 mb-4 bg-background/90 px-4 pb-3 pt-1 backdrop-blur sm:-mx-6 sm:px-6"><div className="mx-auto flex max-w-sm rounded-2xl bg-muted p-1">{(["english", "kanji"] as Category[]).map(item => <button key={item} onClick={() => setCategory(item)} className={cn("flex-1 rounded-xl py-2 text-sm font-semibold transition", category === item ? "bg-background text-foreground shadow-sm" : "text-muted-foreground")}>{categoryLabel[item]}</button>)}</div></div>{dashboard.isLoading ? <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">学習データを読み込んでいます…</CardContent></Card> : dashboard.isError || !data ? <Card><CardContent className="p-10 text-center"><p className="text-sm text-muted-foreground">データを読み込めませんでした。</p><Button className="mt-4" variant="outline" onClick={() => dashboard.refetch()}>再試行</Button></CardContent></Card> : <AnimatePresence mode="wait"><motion.div key={`${page}-${category}`} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.18 }}>{page === "home" && <HomePage pin={pin} category={category} data={data} />}{page === "books" && <BooksPage pin={pin} category={category} data={data} />}{page === "cards" && <CardsPage pin={pin} category={category} data={data} />}{page === "admin" && <AdminPage />}</motion.div></AnimatePresence>}</main><nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur"><div className="mx-auto grid max-w-2xl grid-cols-4 px-2">{navItems.map(item => { const Icon = item.icon; return <button key={item.id} onClick={() => setPage(item.id)} className={cn("flex flex-col items-center gap-1 rounded-xl py-1.5 text-[10px] font-medium transition", page === item.id ? "text-primary" : "text-muted-foreground")}><Icon className={cn("h-5 w-5", page === item.id && "fill-primary/15")} />{item.label}</button>; })}</div></nav><button className="sr-only" onClick={onLogout}>ログアウト</button></div>;
+}
+
+export default function Home() {
+  const [pin, setPin] = useState(() => localStorage.getItem("tonan-learning-pin") ?? "");
+  const [adminStart, setAdminStart] = useState(false);
+  const handleLogin = (value: string) => { localStorage.setItem("tonan-learning-pin", value); setPin(value); };
+  if (adminStart && !pin) return <StudyShell pin="0000" initialPage="admin" onLogout={() => { setAdminStart(false); setPin(""); }} />;
+  if (!pin) return <PinLogin onLoggedIn={handleLogin} onAdmin={() => setAdminStart(true)} />;
+  return <StudyShell pin={pin} onLogout={() => { localStorage.removeItem("tonan-learning-pin"); setPin(""); }} />;
 }
