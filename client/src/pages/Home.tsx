@@ -187,12 +187,22 @@ function CalendarGardenPager({ pin, category, sessions, events, reviewDates, mon
   useEffect(() => {
     const node = calendarRef.current;
     if (!node) return;
-    const updateHeight = () => setCalendarHeight(Math.ceil(node.getBoundingClientRect().height));
-    updateHeight();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(node);
-    return () => observer.disconnect();
+    let locked = false;
+    let observer: ResizeObserver | null = null;
+    const lockHeight = () => {
+      if (locked) return;
+      const height = Math.ceil(node.getBoundingClientRect().height);
+      if (height <= 0) return;
+      locked = true;
+      setCalendarHeight(height);
+      observer?.disconnect();
+    };
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(lockHeight);
+      observer.observe(node);
+    }
+    requestAnimationFrame(lockHeight);
+    return () => observer?.disconnect();
   }, []);
   const onSwipeEnd = (clientX: number) => { if (touchStart.current === null) return; const difference = clientX - touchStart.current; if (Math.abs(difference) > 45) { const pages = ["calendar", "garden", "missions"] as const; const currentIndex = pages.indexOf(page); const nextIndex = Math.max(0, Math.min(pages.length - 1, currentIndex + (difference < 0 ? 1 : -1))); setPage(pages[nextIndex]); } touchStart.current = null; };
   const progress = monster?.nextStageAtSeconds ? Math.round((1 - monster.secondsToNext / (20 * 3600)) * 100) : 100;
