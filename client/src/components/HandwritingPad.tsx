@@ -1,4 +1,4 @@
-import { Eraser } from "lucide-react";
+import { Eraser, Undo2 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 
@@ -9,12 +9,17 @@ type HandwritingPadProps = {
   onImageChange?: (imageDataUrl: string | null) => void;
 };
 
+type StrokeSnapshot = { image: ImageData; hadInk: boolean };
+
 export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageChange }: HandwritingPadProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const drawing = useRef(false);
   const activePointerId = useRef<number | null>(null);
-  const [hasInk, setHasInk] = useState(false);
+  const inkRef = useRef(false);
+  const strokeHistory = useRef<StrokeSnapshot[]>([]);
+  const [, setHasInk] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
 
   const characterCount = Math.max(1, Math.min(4, Array.from(expectedText).length || 1));
   const { width, height } = useMemo(() => ({
@@ -22,14 +27,21 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
     height: 300,
   }), [characterCount]);
 
+  const setInkState = (value: boolean) => {
+    inkRef.current = value;
+    setHasInk(value);
+    onChange(value);
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (canvas && context) context.clearRect(0, 0, canvas.width, canvas.height);
-    setHasInk(false);
+    strokeHistory.current = [];
+    setCanUndo(false);
     drawing.current = false;
     activePointerId.current = null;
-    onChange(false);
+    setInkState(false);
     onImageChange?.(null);
   }, [resetKey, expectedText]);
 
@@ -69,7 +81,7 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
     const canvas = canvasRef.current;
     const position = point(event);
     if (!canvas || !position) return;
-    // ペン側が pointerup を通知しない場合でも、次の筆画を必ず開始できるようにします。
+    // ペン側がpointerupを通知しない場合も、次の筆画を開始できます。
     endStroke();
     try {
       canvas.setPointerCapture(event.pointerId);
@@ -79,6 +91,12 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
     const context = canvas.getContext("2d");
     if (!context) return;
     contextRef.current = context;
+    try {
+      strokeHistory.current.push({ image: context.getImageData(0, 0, canvas.width, canvas.height), hadInk: inkRef.current });
+      setCanUndo(true);
+    } catch {
+      // 履歴取得ができない環境でも、描画自体は継続します。
+    }
     context.beginPath();
     context.moveTo(position.x, position.y);
     context.lineCap = "round";
@@ -92,10 +110,7 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
     context.moveTo(position.x, position.y);
     drawing.current = true;
     activePointerId.current = event.pointerId;
-    if (!hasInk) {
-      setHasInk(true);
-      onChange(true);
-    }
+    if (!inkRef.current) setInkState(true);
   };
 
   const draw = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -119,11 +134,24 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
-    setHasInk(false);
+    strokeHistory.current = [];
+    setCanUndo(false);
     drawing.current = false;
     activePointerId.current = null;
-    onChange(false);
+    setInkState(false);
     onImageChange?.(null);
+  };
+
+  const undoLastStroke = () => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    const previous = strokeHistory.current.pop();
+    if (!canvas || !context || !previous) return;
+    context.putImageData(previous.image, 0, 0);
+    setCanUndo(strokeHistory.current.length > 0);
+    setInkState(previous.hadInk);
+    if (previous.hadInk) exportImage();
+    else onImageChange?.(null);
   };
 
   return (
@@ -151,7 +179,7 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
       </div>
       <div className="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
         <span>{characterCount}文字分の枠に、指またはタッチペンで書いてください</span>
-        <Button type="button" variant="ghost" size="sm" onClick={clear} className="h-7 shrink-0 gap-1"><Eraser className="h-3.5 w-3.5" />消す</Button>
+        <div className="flex shrink-0 gap-1"><Button type="button" variant="ghost" size="sm" disabled={!canUndo} onClick={undoLastStroke} className="h-7 gap-1"><Undo2 className="h-3.5 w-3.5" />一画戻す</Button><Button type="button" variant="ghost" size="sm" onClick={clear} className="h-7 gap-1"><Eraser className="h-3.5 w-3.5" />消す</Button></div>
       </div>
     </div>
   );

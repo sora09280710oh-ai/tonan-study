@@ -21,10 +21,11 @@ describe("漢字AI採点結果", () => {
   it("標準と厳しめの採点基準をプロンプトへ反映する", () => {
     const standard = buildKanjiGradingPrompt("永", "standard");
     const strict = buildKanjiGradingPrompt("永", "strict");
-    expect(standard).toContain("軽微な筆圧やわずかな線の揺れは許容");
+    expect(standard).toContain("目標漢字だと読めるなら正解にする");
+    expect(standard).toContain("判読できる限り correct を返して");
     expect(strict).toContain("細かな形、線の向き、長さ");
     expect(strict).toContain("目標漢字「永」");
-    expect(standard).toContain("採点不可ではなく status を incorrect");
+    expect(standard).toContain("status を ungradable にしてよいのは");
     expect(standard).toContain("画像が真っ白・ほぼ空白");
   });
 });

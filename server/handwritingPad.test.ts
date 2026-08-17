@@ -14,6 +14,8 @@ const context = {
   clearRect: vi.fn(),
   fillRect: vi.fn(),
   drawImage: vi.fn(),
+  getImageData: vi.fn(() => ({ data: new Uint8ClampedArray(), width: 360, height: 300 } as ImageData)),
+  putImageData: vi.fn(),
   lineCap: "round",
   lineJoin: "round",
   lineWidth: 5,
@@ -31,7 +33,7 @@ describe("HandwritingPad", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/jpeg;base64,handwriting");
     const onChange = vi.fn();
     const onImageChange = vi.fn();
-    const { getByLabelText, rerender } = render(createElement(HandwritingPad, { expectedText: "永", resetKey: 101, onChange, onImageChange }));
+    const { getByLabelText, getByRole, rerender } = render(createElement(HandwritingPad, { expectedText: "永", resetKey: 101, onChange, onImageChange }));
     const firstCanvas = getByLabelText("1文字分の漢字の手書き入力欄") as HTMLCanvasElement;
     vi.spyOn(firstCanvas, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 360, height: 300 } as DOMRect);
     onChange.mockClear();
@@ -47,6 +49,11 @@ describe("HandwritingPad", () => {
     fireEvent.pointerMove(firstCanvas, { pointerId: 2, isPrimary: true, clientX: 240, clientY: 100 });
     fireEvent.pointerUp(firstCanvas, { pointerId: 2, isPrimary: true, clientX: 240, clientY: 100 });
     expect(onImageChange).toHaveBeenCalledTimes(2);
+    const undo = getByRole("button", { name: "一画戻す" });
+    expect((undo as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(undo);
+    expect(context.putImageData).toHaveBeenCalledTimes(1);
+    expect(onImageChange).toHaveBeenCalledTimes(3);
 
     rerender(createElement(HandwritingPad, { expectedText: "挑戦", resetKey: 102, onChange, onImageChange }));
     const nextCanvas = getByLabelText("2文字分の漢字の手書き入力欄") as HTMLCanvasElement;

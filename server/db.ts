@@ -63,8 +63,8 @@ export function parseKanjiAiGrade(raw: string): KanjiAiGrade {
 export function buildKanjiGradingPrompt(expectedKanji: string, strictness: KanjiGradingStrictness): string {
   const strictnessInstruction = strictness === "strict"
     ? "厳しめ：細かな形、線の向き、長さ、とめ・はね・はらいの違いも不正解にする"
-    : "標準：学習段階として読める正しい漢字の形を重視し、軽微な筆圧やわずかな線の揺れは許容する";
-  return `あなたは日本語の漢字手書き採点者です。画像は白背景に濃い線で書かれています。採点基準は「${strictnessInstruction}」です。画像の手書きが目標漢字「${expectedKanji}」として成立しているかをこの基準で採点してください。形、画数、部首、線の方向、とめ・はね・はらいを確認します。字形が崩れている、線が短い、部首が不正確、またはとめ・はね・はらいが不足する場合は、採点不可ではなく status を incorrect にして改善点を示してください。status を ungradable にしてよいのは、画像が真っ白・ほぼ空白、手書きが一切ない、画像が壊れている、または何の文字か全く判断できない場合だけです。正解は correct、不正解は incorrect です。不正解では最大5件、問題の位置を画像内の百分率 x/y (左上=0/0、右下=100/100) で示し、kind を shape/tome/hane/harai/stroke から選び、日本語で短く改善点を説明してください。JSONのみを返してください。`;
+    : "標準：学習段階の手書きとして目標漢字だと読めるなら正解にする。軽微な筆圧やわずかな線の揺れ、字の大きさ・位置・バランス、とめ・はね・はらいの小さな違いでは不正解にしない";
+  return `あなたは日本語の漢字手書き採点者です。画像は白背景に濃い線で書かれています。採点基準は「${strictnessInstruction}」です。画像の手書きが目標漢字「${expectedKanji}」として成立しているかをこの基準で採点してください。形、画数、部首、線の方向、とめ・はね・はらいを確認します。標準採点では、目標漢字として判読できる限り correct を返してください。標準で incorrect にするのは、別の漢字に読める、重要な部首や構成要素が欠けている、または画数・形が大きく異なり目標漢字として判読できない場合だけです。字形が少し崩れている、線が短い、配置やバランスが悪い、とめ・はね・はらいが少し不十分というだけでは incorrect にしません。厳しめの場合だけ、それらの細部も判定に使ってください。status を ungradable にしてよいのは、画像が真っ白・ほぼ空白、手書きが一切ない、画像が壊れている、または何の文字か全く判断できない場合だけです。正解は correct、不正解は incorrect です。不正解では最大5件、問題の位置を画像内の百分率 x/y (左上=0/0、右下=100/100) で示し、kind を shape/tome/hane/harai/stroke から選び、日本語で短く改善点を説明してください。JSONのみを返してください。`;
 }
 
 export async function gradeKanjiHandwriting(imageDataUrl: string, expectedKanji: string, strictness: KanjiGradingStrictness = "standard"): Promise<KanjiAiGrade> {
