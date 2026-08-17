@@ -10,6 +10,7 @@ import {
   monsterEvolutionFromSeconds,
   getMissionClaimReward,
   applyMissionMinutesToSeconds,
+  buildMissionClaimPlan,
 } from "./db";
 
 describe("mission rules", () => {
@@ -53,5 +54,17 @@ describe("mission rules", () => {
     expect(getMissionClaimReward(item)).toBe(5);
     expect(() => getMissionClaimReward({ ...item, claimed: true })).toThrow("受け取り済み");
     expect(() => getMissionClaimReward({ ...item, claimable: false })).toThrow("達成していません");
+  });
+
+  it("creates one atomic claim plan and rejects duplicate or previously claimed rewards", () => {
+    const status = {
+      date: "2026-08-17",
+      month: "2026-08",
+      daily: [{ id: "daily-login", title: "ログインする", group: "デイリー", current: 1, target: 1, rewardPoints: 1, completed: true, claimed: false, claimable: true }],
+      monthly: [{ id: "monthly-login-10", title: "今月10日ログインする", group: "ログイン・継続", current: 10, target: 10, rewardPoints: 1, completed: true, claimed: false, claimable: true }],
+    };
+    expect(buildMissionClaimPlan(status)).toMatchObject({ rewardPoints: 2, items: [{ id: "daily-login", periodKey: "2026-08-17" }, { id: "monthly-login-10", periodKey: "2026-08" }] });
+    expect(() => buildMissionClaimPlan(status, ["daily-login", "daily-login"])).toThrow("複数回");
+    expect(() => buildMissionClaimPlan({ ...status, daily: [{ ...status.daily[0], claimed: true, claimable: false }] }, ["daily-login"])).toThrow("受け取り済み");
   });
 });

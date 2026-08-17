@@ -154,8 +154,9 @@ function CalendarGrid({ sessions, events, reviewDates, onSelect }: { sessions: {
 function MissionPage({ pin }: { pin: string }) {
   const utils = trpc.useUtils();
   const status = trpc.learning.missionStatus.useQuery({ pin }, { refetchOnWindowFocus: true });
-  const claim = trpc.learning.claimMission.useMutation({ onSuccess: async data => { toast.success(`${data.rewardPoints}ポイント（${data.appliedMinutes}分）を育成時間へ加算しました`); await utils.learning.missionStatus.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
-  const claimAll = trpc.learning.claimAllMissions.useMutation({ onSuccess: async data => { toast.success(`${data.rewardPoints}ポイント（${data.appliedMinutes}分）をまとめて加算しました`); await utils.learning.missionStatus.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
+  const refreshMissionState = async () => { await Promise.all([utils.learning.missionStatus.invalidate(), utils.learning.dashboard.invalidate()]); };
+  const claim = trpc.learning.claimMission.useMutation({ onSuccess: async data => { toast.success(`${data.rewardPoints}ポイント（${data.appliedMinutes}分）を育成時間へ加算しました`); await refreshMissionState(); }, onError: async error => { toast.error(error.message); await refreshMissionState(); } });
+  const claimAll = trpc.learning.claimAllMissions.useMutation({ onSuccess: async data => { toast.success(`${data.rewardPoints}ポイント（${data.appliedMinutes}分）をまとめて加算しました`); await refreshMissionState(); }, onError: async error => { toast.error(error.message); await refreshMissionState(); } });
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ "ログイン・継続": true });
   const [missionTab, setMissionTab] = useState<"daily" | "monthly">("daily");
   if (status.isLoading) return <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">ミッションを読み込み中…</CardContent></Card>;

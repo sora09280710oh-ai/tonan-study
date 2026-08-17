@@ -285,31 +285,74 @@ export function getMissionClaimReward(item: Pick<MissionItem, "rewardPoints" | "
   return item.rewardPoints;
 }
 
+export function buildMissionClaimPlan(
+  status: Pick<Awaited<ReturnType<typeof getMissionStatus>>, "date" | "month" | "daily" | "monthly">,
+  missionIds?: string[],
+) {
+  const allItems = [...status.daily, ...status.monthly];
+  const selectedItems = missionIds ? missionIds.map(missionId => {
+    const item = allItems.find(candidate => candidate.id === missionId);
+    if (!item) throw new Error("ミッションが見つかりません");
+    return item;
+  }) : allItems.filter(item => item.claimable);
+  if (new Set(selectedItems.map(item => item.id)).size !== selectedItems.length) throw new Error("同じ報酬を複数回受け取ることはできません");
+  const items = selectedItems.map(item => ({
+    ...item,
+    rewardPoints: getMissionClaimReward(item),
+    periodKey: item.id.startsWith("daily-") ? status.date : status.month,
+  }));
+  return { items, rewardPoints: items.reduce((total, item) => total + item.rewardPoints, 0) };
+}
+
 export function applyMissionMinutesToSeconds(baseSeconds: number, appliedMinutes: number) {
   return Math.max(0, baseSeconds) + Math.max(0, appliedMinutes) * 60;
 }
 
+function isDuplicateMissionClaim(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "ER_DUP_ENTRY";
+}
+
 export async function claimMission(pin: string, missionId: string) {
   const status = await getMissionStatus(pin);
-  const item = [...status.daily, ...status.monthly].find(mission => mission.id === missionId);
-  if (!item) throw new Error("ミッションが見つかりません");
-  const rewardPoints = getMissionClaimReward(item);
+  const plan = buildMissionClaimPlan(status, [missionId]);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  const periodKey = missionId.startsWith("daily-") ? status.date : status.month;
-  await db.insert(missionClaims).values({ learnerId: learner.id, missionId, periodKey, rewardPoints: item.rewardPoints });
-  if (missionId === "daily-all-clear") await recordMissionEventForLearner(learner.id, "daily_clear", "english", `daily-clear-${status.date}`);
-  await db.insert(learnerPointBalances).values({ learnerId: learner.id, balance: rewardPoints, totalEarned: rewardPoints, totalAppliedMinutes: rewardPoints }).onDuplicateKeyUpdate({ set: { balance: sql`${learnerPointBalances.balance} + ${rewardPoints}`, totalEarned: sql`${learnerPointBalances.totalEarned} + ${rewardPoints}`, totalAppliedMinutes: sql`${learnerPointBalances.totalAppliedMinutes} + ${rewardPoints}` } });
-  return { success: true, rewardPoints, appliedMinutes: rewardPoints };
+  try {
+    await db.transaction(async tx => {
+      for (const item of plan.items) {
+        await tx.insert(missionClaims).values({ learnerId: learner.id, missionId: item.id, periodKey: item.periodKey, rewardPoints: item.rewardPoints });
+        if (item.id === "daily-all-clear") await tx.insert(missionEvents).values({ learnerId: learner.id, eventType: "daily_clear", category: "english", eventKey: `daily-clear-${status.date}`, eventDate: status.date }).onDuplicateKeyUpdate({ set: { eventDate: status.date } });
+      }
+      await tx.insert(learnerPointBalances).values({ learnerId: learner.id, balance: plan.rewardPoints, totalEarned: plan.rewardPoints, totalAppliedMinutes: plan.rewardPoints }).onDuplicateKeyUpdate({ set: { balance: sql`${learnerPointBalances.balance} + ${plan.rewardPoints}`, totalEarned: sql`${learnerPointBalances.totalEarned} + ${plan.rewardPoints}`, totalAppliedMinutes: sql`${learnerPointBalances.totalAppliedMinutes} + ${plan.rewardPoints}` } });
+    });
+  } catch (error) {
+    if (isDuplicateMissionClaim(error)) throw new Error("この報酬は受け取り済みです。画面を更新しました。");
+    throw error;
+  }
+  return { success: true, rewardPoints: plan.rewardPoints, appliedMinutes: plan.rewardPoints };
 }
 
 export async function claimAllMissions(pin: string) {
   const status = await getMissionStatus(pin);
-  const claimable = [...status.daily, ...status.monthly].filter(item => item.claimable);
-  let points = 0;
-  for (const item of claimable) points += (await claimMission(pin, item.id)).rewardPoints;
-  return { success: true, rewardPoints: points, appliedMinutes: points, claimedCount: claimable.length };
+  const plan = buildMissionClaimPlan(status);
+  if (!plan.items.length) return { success: true, rewardPoints: 0, appliedMinutes: 0, claimedCount: 0 };
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  try {
+    await db.transaction(async tx => {
+      for (const item of plan.items) {
+        await tx.insert(missionClaims).values({ learnerId: learner.id, missionId: item.id, periodKey: item.periodKey, rewardPoints: item.rewardPoints });
+        if (item.id === "daily-all-clear") await tx.insert(missionEvents).values({ learnerId: learner.id, eventType: "daily_clear", category: "english", eventKey: `daily-clear-${status.date}`, eventDate: status.date }).onDuplicateKeyUpdate({ set: { eventDate: status.date } });
+      }
+      await tx.insert(learnerPointBalances).values({ learnerId: learner.id, balance: plan.rewardPoints, totalEarned: plan.rewardPoints, totalAppliedMinutes: plan.rewardPoints }).onDuplicateKeyUpdate({ set: { balance: sql`${learnerPointBalances.balance} + ${plan.rewardPoints}`, totalEarned: sql`${learnerPointBalances.totalEarned} + ${plan.rewardPoints}`, totalAppliedMinutes: sql`${learnerPointBalances.totalAppliedMinutes} + ${plan.rewardPoints}` } });
+    });
+  } catch (error) {
+    if (isDuplicateMissionClaim(error)) throw new Error("受取状態が更新されています。画面を更新してもう一度お試しください。");
+    throw error;
+  }
+  return { success: true, rewardPoints: plan.rewardPoints, appliedMinutes: plan.rewardPoints, claimedCount: plan.items.length };
 }
 
 let _db: ReturnType<typeof drizzle> | null = null;
