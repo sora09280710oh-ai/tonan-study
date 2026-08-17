@@ -2,7 +2,7 @@ import { Eraser } from "lucide-react";
 import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 
-export function HandwritingPad({ onChange }: { onChange: (hasInk: boolean) => void }) {
+export function HandwritingPad({ onChange, onImageChange }: { onChange: (hasInk: boolean) => void; onImageChange?: (imageDataUrl: string | null) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const [hasInk, setHasInk] = useState(false);
@@ -37,6 +37,7 @@ export function HandwritingPad({ onChange }: { onChange: (hasInk: boolean) => vo
     if (!position || !context) return;
     context.lineTo(position.x, position.y);
     context.stroke();
+    onImageChange?.(canvasRef.current?.toDataURL("image/png") ?? null);
     if (!hasInk) {
       setHasInk(true);
       onChange(true);
@@ -50,6 +51,7 @@ export function HandwritingPad({ onChange }: { onChange: (hasInk: boolean) => vo
     context.clearRect(0, 0, canvas.width, canvas.height);
     setHasInk(false);
     onChange(false);
+    onImageChange?.(null);
   };
 
   return (

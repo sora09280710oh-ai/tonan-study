@@ -17,9 +17,90 @@ import {
 } from "../drizzle/schema";
 import { calculateStreak, nextReviewDate, nextStrength } from "./studyLogic";
 import { ENV } from "./_core/env";
+import { invokeLLM } from "./_core/llm";
 
 export type StudyCategory = "english" | "kanji";
 type EntryDraft = { front: string; back: string; writingAnswer?: string | null; importBatchId?: string | null };
+
+export type KanjiAiGrade = {
+  status: "correct" | "incorrect" | "ungradable";
+  summary: string;
+  issues: Array<{
+    x: number;
+    y: number;
+    kind: "shape" | "tome" | "hane" | "harai" | "stroke";
+    description: string;
+  }>;
+};
+
+export function parseKanjiAiGrade(raw: string): KanjiAiGrade {
+  try {
+    const parsed = JSON.parse(raw) as Partial<KanjiAiGrade>;
+    const status = parsed.status === "correct" || parsed.status === "incorrect" || parsed.status === "ungradable" ? parsed.status : "ungradable";
+    const issues = Array.isArray(parsed.issues) ? parsed.issues.slice(0, 5).flatMap(issue => {
+      if (!issue || typeof issue !== "object") return [];
+      const value = issue as Record<string, unknown>;
+      const kind = value.kind;
+      if (kind !== "shape" && kind !== "tome" && kind !== "hane" && kind !== "harai" && kind !== "stroke") return [];
+      return [{
+        x: Math.max(0, Math.min(100, Number(value.x) || 50)),
+        y: Math.max(0, Math.min(100, Number(value.y) || 50)),
+        kind: kind as KanjiAiGrade["issues"][number]["kind"],
+        description: typeof value.description === "string" ? value.description.slice(0, 160) : "書き方を見直してください。",
+      }];
+    }) : [];
+    return {
+      status,
+      summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 240) : "採点結果を読み取れませんでした。",
+      issues,
+    };
+  } catch {
+    return { status: "ungradable", summary: "採点結果を読み取れませんでした。もう一度、はっきり書いてください。", issues: [] };
+  }
+}
+
+export async function gradeKanjiHandwriting(imageDataUrl: string, expectedKanji: string): Promise<KanjiAiGrade> {
+  if (!imageDataUrl.startsWith("data:image/")) throw new Error("手書き画像を読み取れませんでした");
+  const response = await invokeLLM({
+    model: "gemini-3-flash-preview",
+    max_tokens: 1600,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: `あなたは日本語の漢字手書き採点者です。画像の手書きが目標漢字「${expectedKanji}」として成立しているかを厳密に採点してください。形、画数、部首、線の方向、とめ・はね・はらいを確認します。文字が書かれていない、目標漢字として形が成り立たない、または画像が読めない場合は status を ungradable にしてください。正解は correct、不正解は incorrect です。不正解では最大5件、問題の位置を画像内の百分率 x/y (左上=0/0、右下=100/100) で示し、kind を shape/tome/hane/harai/stroke から選び、日本語で短く改善点を説明してください。JSONのみを返してください。` },
+        { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
+      ],
+    }],
+    outputSchema: {
+      name: "kanji_handwriting_grade",
+      strict: true,
+      schema: {
+        type: "object",
+        properties: {
+          status: { type: "string", enum: ["correct", "incorrect", "ungradable"] },
+          summary: { type: "string" },
+          issues: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                x: { type: "number" }, y: { type: "number" },
+                kind: { type: "string", enum: ["shape", "tome", "hane", "harai", "stroke"] },
+                description: { type: "string" },
+              },
+              required: ["x", "y", "kind", "description"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["status", "summary", "issues"],
+        additionalProperties: false,
+      },
+    },
+  });
+  const content = response.choices[0]?.message.content;
+  return parseKanjiAiGrade(typeof content === "string" ? content : JSON.stringify(content));
+}
 
 function appDateString(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);

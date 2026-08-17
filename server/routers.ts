@@ -19,6 +19,7 @@ import {
   getAdminOverview,
   getDashboard,
   getWordEntries,
+  gradeKanjiHandwriting,
   listAccessibleWordBooks,
   listCardSets,
   loginLearner,
@@ -70,6 +71,7 @@ export const appRouter = router({
     dayDetail: publicProcedure.input(z.object({ pin, category, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })).query(({ input }) => getDayDetail(input.pin, input.category, input.date)),
     deletePersonalBook: publicProcedure.input(z.object({ pin, bookId: z.number().int().positive() })).mutation(({ input }) => deletePersonalBook(input.pin, input.bookId)),
     deleteCardSet: publicProcedure.input(z.object({ pin, cardSetId: z.number().int().positive() })).mutation(({ input }) => deleteCardSet(input.pin, input.cardSetId)),
+    gradeKanjiHandwriting: publicProcedure.input(z.object({ pin, expectedKanji: z.string().trim().min(1).max(20), imageDataUrl: z.string().min(100).max(3_000_000) })).mutation(({ input }) => gradeKanjiHandwriting(input.imageDataUrl, input.expectedKanji)),
   }),
   admin: router({
     verify: publicProcedure.input(z.object({ password: z.string() })).mutation(({ input }) => verifyAdminPassword(input.password)),
