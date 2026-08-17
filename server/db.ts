@@ -64,19 +64,19 @@ export function buildKanjiGradingPrompt(expectedKanji: string, strictness: Kanji
   const strictnessInstruction = strictness === "strict"
     ? "厳しめ：細かな形、線の向き、長さ、とめ・はね・はらいの違いも不正解にする"
     : "標準：学習段階として読める正しい漢字の形を重視し、軽微な筆圧やわずかな線の揺れは許容する";
-  return `あなたは日本語の漢字手書き採点者です。採点基準は「${strictnessInstruction}」です。画像の手書きが目標漢字「${expectedKanji}」として成立しているかをこの基準で採点してください。形、画数、部首、線の方向、とめ・はね・はらいを確認します。文字が書かれていない、目標漢字として形が成り立たない、または画像が読めない場合は status を ungradable にしてください。正解は correct、不正解は incorrect です。不正解では最大5件、問題の位置を画像内の百分率 x/y (左上=0/0、右下=100/100) で示し、kind を shape/tome/hane/harai/stroke から選び、日本語で短く改善点を説明してください。JSONのみを返してください。`;
+  return `あなたは日本語の漢字手書き採点者です。画像は白背景に濃い線で書かれています。採点基準は「${strictnessInstruction}」です。画像の手書きが目標漢字「${expectedKanji}」として成立しているかをこの基準で採点してください。形、画数、部首、線の方向、とめ・はね・はらいを確認します。字形が崩れている、線が短い、部首が不正確、またはとめ・はね・はらいが不足する場合は、採点不可ではなく status を incorrect にして改善点を示してください。status を ungradable にしてよいのは、画像が真っ白・ほぼ空白、手書きが一切ない、画像が壊れている、または何の文字か全く判断できない場合だけです。正解は correct、不正解は incorrect です。不正解では最大5件、問題の位置を画像内の百分率 x/y (左上=0/0、右下=100/100) で示し、kind を shape/tome/hane/harai/stroke から選び、日本語で短く改善点を説明してください。JSONのみを返してください。`;
 }
 
 export async function gradeKanjiHandwriting(imageDataUrl: string, expectedKanji: string, strictness: KanjiGradingStrictness = "standard"): Promise<KanjiAiGrade> {
   if (!imageDataUrl.startsWith("data:image/")) throw new Error("手書き画像を読み取れませんでした");
   const response = await invokeLLM({
     model: "gemini-3-flash-preview",
-    max_tokens: 1600,
+    max_tokens: 700,
     messages: [{
       role: "user",
       content: [
         { type: "text", text: buildKanjiGradingPrompt(expectedKanji, strictness) },
-        { type: "image_url", image_url: { url: imageDataUrl, detail: "high" } },
+        { type: "image_url", image_url: { url: imageDataUrl, detail: "auto" } },
       ],
     }],
     outputSchema: {

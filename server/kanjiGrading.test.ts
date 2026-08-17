@@ -24,5 +24,7 @@ describe("漢字AI採点結果", () => {
     expect(standard).toContain("軽微な筆圧やわずかな線の揺れは許容");
     expect(strict).toContain("細かな形、線の向き、長さ");
     expect(strict).toContain("目標漢字「永」");
+    expect(standard).toContain("採点不可ではなく status を incorrect");
+    expect(standard).toContain("画像が真っ白・ほぼ空白");
   });
 });
