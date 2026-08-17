@@ -57,12 +57,20 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
     onImageChange?.(exportCanvas.toDataURL("image/jpeg", 0.86));
   };
 
+  const endStroke = () => {
+    if (!drawing.current) return;
+    drawing.current = false;
+    activePointerId.current = null;
+    exportImage();
+  };
+
   const begin = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (event.isPrimary === false) return;
     event.preventDefault();
     const canvas = canvasRef.current;
     const position = point(event);
     if (!canvas || !position) return;
+    // ペン側が pointerup を通知しない場合でも、次の筆画を必ず開始できるようにします。
+    endStroke();
     try {
       canvas.setPointerCapture(event.pointerId);
     } catch {
@@ -91,7 +99,7 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
   };
 
   const draw = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!drawing.current || activePointerId.current !== event.pointerId) return;
+    if (!drawing.current || (activePointerId.current !== null && activePointerId.current !== event.pointerId)) return;
     event.preventDefault();
     const position = point(event);
     const context = contextRef.current;
@@ -101,16 +109,9 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
   };
 
   const finish = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!drawing.current || activePointerId.current !== event.pointerId) return;
+    if (!drawing.current || (activePointerId.current !== null && activePointerId.current !== event.pointerId)) return;
     event.preventDefault();
-    drawing.current = false;
-    activePointerId.current = null;
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {
-      // ポインターが既に解放されている場合があります。
-    }
-    exportImage();
+    endStroke();
   };
 
   const clear = () => {
@@ -140,6 +141,7 @@ export function HandwritingPad({ expectedText = "", resetKey, onChange, onImageC
           onPointerMove={draw}
           onPointerUp={finish}
           onPointerCancel={finish}
+          onLostPointerCapture={finish}
           onPointerLeave={event => { if (event.buttons === 0) finish(event); }}
           onContextMenu={event => event.preventDefault()}
           className="absolute inset-0 h-full w-full cursor-crosshair select-none touch-none [-webkit-touch-callout:none] [-webkit-user-select:none]"

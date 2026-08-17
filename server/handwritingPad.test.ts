@@ -43,6 +43,11 @@ describe("HandwritingPad", () => {
     expect(onChange).toHaveBeenCalledWith(true);
     expect(onImageChange).toHaveBeenLastCalledWith("data:image/jpeg;base64,handwriting");
 
+    fireEvent.pointerDown(firstCanvas, { pointerId: 2, isPrimary: true, clientX: 180, clientY: 30 });
+    fireEvent.pointerMove(firstCanvas, { pointerId: 2, isPrimary: true, clientX: 240, clientY: 100 });
+    fireEvent.pointerUp(firstCanvas, { pointerId: 2, isPrimary: true, clientX: 240, clientY: 100 });
+    expect(onImageChange).toHaveBeenCalledTimes(2);
+
     rerender(createElement(HandwritingPad, { expectedText: "挑戦", resetKey: 102, onChange, onImageChange }));
     const nextCanvas = getByLabelText("2文字分の漢字の手書き入力欄") as HTMLCanvasElement;
     vi.spyOn(nextCanvas, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: 600, height: 300 } as DOMRect);
