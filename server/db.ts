@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -7,6 +7,9 @@ import {
   cardSets,
   dailySelectAttempts,
   learnerEvents,
+  learnerPointBalances,
+  missionClaims,
+  missionEvents,
   learners,
   monsterStages,
   recommendedTests,
@@ -39,6 +42,11 @@ export type KanjiGradingStrictness = "standard" | "strict";
 export const MONSTER_STAGE_COUNT = 13;
 export const MONSTER_HOURS_PER_STAGE = 20;
 export const DAILY_SELECT_QUESTION_COUNT = 10;
+const DAILY_MISSION_IDS = ["daily-login", "daily-ai-english", "daily-ai-kanji", "daily-test", "daily-practice"] as const;
+export const DAILY_REWARD_POINTS = 1;
+export const DAILY_ALL_CLEAR_REWARD = 5;
+export const MONTHLY_ALL_CLEAR_REWARD = 30;
+const JST_MONTH_FORMAT = /^\\d{4}-\\d{2}$/;
 
 export function monsterEvolutionFromSeconds(totalSeconds: number) {
   const secondsPerStage = MONSTER_HOURS_PER_STAGE * 3600;
@@ -139,10 +147,154 @@ export async function gradeKanjiHandwriting(imageDataUrl: string, expectedKanji:
   return parseKanjiAiGrade(typeof content === "string" ? content : JSON.stringify(content));
 }
 
-function appDateString(date = new Date()) {
+export function appDateString(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
   const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
+}
+
+export function appMonthString(date = new Date()) {
+  return appDateString(date).slice(0, 7);
+}
+
+export function daysBetween(a: string, b: string) {
+  const start = new Date(`${a}T00:00:00Z`).getTime();
+  const end = new Date(`${b}T00:00:00Z`).getTime();
+  return Math.round((end - start) / 86_400_000);
+}
+
+export function monthlyLoginTargetAvailable(target: number, year: number, month: number) {
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return target <= daysInMonth;
+}
+
+export function consecutiveDays(dates: string[]) {
+  const sorted = Array.from(new Set(dates)).sort();
+  let best = 0;
+  let current = 0;
+  let previous: string | null = null;
+  for (const date of sorted) {
+    current = previous && daysBetween(previous, date) === 1 ? current + 1 : 1;
+    best = Math.max(best, current);
+    previous = date;
+  }
+  return best;
+}
+
+export type MissionItem = { id: string; title: string; group: string; current: number; target: number; rewardPoints: number; completed: boolean; claimed: boolean; claimable: boolean };
+
+const monthlyMissionDefinitions = [
+  ...[10, 15, 20, 25, 30].map(target => ({ id: `monthly-login-${target}`, title: `今月${target}日ログインする`, group: "ログイン・継続", metric: "loginDays", target })),
+  ...[3, 5, 7, 10, 15].map(target => ({ id: `monthly-streak-${target}`, title: `${target}日連続でログインする`, group: "ログイン・継続", metric: "streak", target })),
+  { id: "monthly-saturday-3", title: "土曜日に3回ログインする", group: "ログイン・継続", metric: "saturdays", target: 3 },
+  { id: "monthly-sunday-3", title: "日曜日に3回ログインする", group: "ログイン・継続", metric: "sundays", target: 3 },
+  ...[50, 100, 200, 300, 500].map(target => ({ id: `monthly-answers-${target}`, title: `今月合計${target}問解く`, group: "解いた問題数", metric: "answers", target })),
+  ...[3, 5, 10, 15, 20, 25, 30].map(target => ({ id: `monthly-ai-${target}`, title: `AIセレクト10を${target}回クリアする`, group: "モード別プレイ", metric: "aiSelects", target })),
+  ...[1, 5, 10, 15, 20, 25, 30].map(target => ({ id: `monthly-daily-${target}`, title: `デイリーミッションを${target}回全クリアする`, group: "デイリー連動", metric: "dailyClears", target })),
+] as const;
+
+async function recordMissionEventForLearner(learnerId: number, eventType: "login" | "test" | "practice" | "answer" | "daily_select" | "daily_clear", category: StudyCategory, eventKey?: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const date = appDateString();
+  const key = eventKey ?? `${eventType}-${category}-${Date.now()}-${randomUUID()}`;
+  await db.insert(missionEvents).values({ learnerId, eventType, category, eventKey: key, eventDate: date }).onDuplicateKeyUpdate({ set: { eventDate: date } });
+}
+
+export async function recordMissionEvent(pin: string, eventType: "login" | "test" | "practice" | "answer" | "daily_select" | "daily_clear", category: StudyCategory = "english", eventKey?: string) {
+  const learner = await learnerForPin(pin);
+  await recordMissionEventForLearner(learner.id, eventType, category, eventKey);
+}
+
+function claimedSet(rows: Array<{ missionId: string; periodKey: string }>, periodKey: string) {
+  return new Set(rows.filter(row => row.periodKey === periodKey).map(row => row.missionId));
+}
+
+export async function getMissionStatus(pin: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const today = appDateString();
+  const month = today.slice(0, 7);
+  if (!JST_MONTH_FORMAT.test(month)) throw new Error("日付を計算できませんでした");
+  const [events, dailyAttempts, claims, balances] = await Promise.all([
+    db.select().from(missionEvents).where(eq(missionEvents.learnerId, learner.id)),
+    db.select().from(dailySelectAttempts).where(eq(dailySelectAttempts.learnerId, learner.id)),
+    db.select({ missionId: missionClaims.missionId, periodKey: missionClaims.periodKey }).from(missionClaims).where(eq(missionClaims.learnerId, learner.id)),
+    db.select().from(learnerPointBalances).where(eq(learnerPointBalances.learnerId, learner.id)).limit(1),
+  ]);
+  const todayEvents = events.filter(event => event.eventDate === today);
+  const monthEvents = events.filter(event => event.eventDate.startsWith(month));
+  const loginDates = Array.from(new Set(events.filter(event => event.eventType === "login").map(event => event.eventDate)));
+  const monthLoginDates = loginDates.filter(date => date.startsWith(month));
+  const monthCompletedAi = dailyAttempts.filter(attempt => attempt.selectDate.startsWith(month) && attempt.completedAt);
+  const answerCount = monthEvents.filter(event => event.eventType === "answer").length;
+  const aiSelectCount = monthCompletedAi.length;
+  const dailyClearDates = Array.from(new Set(events.filter(event => event.eventType === "daily_clear").map(event => event.eventDate)));
+  const saturdays = monthLoginDates.filter(date => new Date(`${date}T00:00:00Z`).getUTCDay() === 6).length;
+  const sundays = monthLoginDates.filter(date => new Date(`${date}T00:00:00Z`).getUTCDay() === 0).length;
+  const metrics: Record<string, number> = {
+    loginDays: monthLoginDates.length,
+    streak: consecutiveDays(loginDates),
+    saturdays,
+    sundays,
+    answers: answerCount,
+    aiSelects: aiSelectCount,
+    dailyClears: dailyClearDates.filter(date => date.startsWith(month)).length,
+  };
+  const dailyClaimed = claimedSet(claims, today);
+  const monthClaimed = claimedSet(claims, month);
+  const daily: MissionItem[] = [
+    { id: "daily-login", title: "ログインする", group: "デイリー", current: todayEvents.some(event => event.eventType === "login") ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-login"), claimable: false },
+    { id: "daily-ai-english", title: "AIセレクト10（英語）を解く", group: "デイリー", current: dailyAttempts.some(attempt => attempt.category === "english" && attempt.selectDate === today && Boolean(attempt.completedAt)) ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-ai-english"), claimable: false },
+    { id: "daily-ai-kanji", title: "AIセレクト10（漢字）を解く", group: "デイリー", current: dailyAttempts.some(attempt => attempt.category === "kanji" && attempt.selectDate === today && Boolean(attempt.completedAt)) ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-ai-kanji"), claimable: false },
+    { id: "daily-test", title: "テストモードでテストを受ける", group: "デイリー", current: todayEvents.some(event => event.eventType === "test") ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-test"), claimable: false },
+    { id: "daily-practice", title: "単語カードで練習をする", group: "デイリー", current: todayEvents.some(event => event.eventType === "practice") ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-practice"), claimable: false },
+  ].map(item => ({ ...item, completed: item.current >= item.target, claimable: item.current >= item.target && !item.claimed }));
+  const dailyClear = daily.every(item => item.completed);
+  const dailyBonus: MissionItem = { id: "daily-all-clear", title: "デイリーミッションを全部クリアする", group: "デイリー", current: daily.filter(item => item.completed).length, target: daily.length, rewardPoints: DAILY_ALL_CLEAR_REWARD, completed: dailyClear, claimed: dailyClaimed.has("daily-all-clear"), claimable: dailyClear && !dailyClaimed.has("daily-all-clear") };
+  const monthly: MissionItem[] = monthlyMissionDefinitions.map(definition => {
+    const current = metrics[definition.metric] ?? 0;
+    const claimed = monthClaimed.has(definition.id);
+    return { id: definition.id, title: definition.title, group: definition.group, current, target: definition.target, rewardPoints: 1, completed: current >= definition.target, claimed, claimable: current >= definition.target && !claimed };
+  });
+  const monthlyAllClear = monthly.every(item => item.completed);
+  const monthlyBonus: MissionItem = { id: "monthly-all-clear", title: "マンスリーミッションを全部クリアする", group: "マンスリー", current: monthly.filter(item => item.completed).length, target: monthly.length, rewardPoints: MONTHLY_ALL_CLEAR_REWARD, completed: monthlyAllClear, claimed: monthClaimed.has("monthly-all-clear"), claimable: monthlyAllClear && !monthClaimed.has("monthly-all-clear") };
+  const pointBalance = balances[0] ?? { balance: 0, totalEarned: 0, totalAppliedMinutes: 0 };
+  return { date: today, month, daily: [...daily, dailyBonus], monthly: [...monthly, monthlyBonus], pointBalance, dailyProgress: { current: daily.filter(item => item.completed).length, target: daily.length }, monthlyProgress: { current: monthly.filter(item => item.completed).length, target: monthly.length }, thirdMissionType: null };
+}
+
+export function getMissionClaimReward(item: Pick<MissionItem, "rewardPoints" | "claimed" | "claimable">) {
+  if (item.claimed) throw new Error("この報酬は受け取り済みです");
+  if (!item.claimable) throw new Error("まだ達成していません");
+  return item.rewardPoints;
+}
+
+export function applyMissionMinutesToSeconds(baseSeconds: number, appliedMinutes: number) {
+  return Math.max(0, baseSeconds) + Math.max(0, appliedMinutes) * 60;
+}
+
+export async function claimMission(pin: string, missionId: string) {
+  const status = await getMissionStatus(pin);
+  const item = [...status.daily, ...status.monthly].find(mission => mission.id === missionId);
+  if (!item) throw new Error("ミッションが見つかりません");
+  const rewardPoints = getMissionClaimReward(item);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const periodKey = missionId.startsWith("daily-") ? status.date : status.month;
+  await db.insert(missionClaims).values({ learnerId: learner.id, missionId, periodKey, rewardPoints: item.rewardPoints });
+  if (missionId === "daily-all-clear") await recordMissionEventForLearner(learner.id, "daily_clear", "english", `daily-clear-${status.date}`);
+  await db.insert(learnerPointBalances).values({ learnerId: learner.id, balance: rewardPoints, totalEarned: rewardPoints, totalAppliedMinutes: rewardPoints }).onDuplicateKeyUpdate({ set: { balance: sql`${learnerPointBalances.balance} + ${rewardPoints}`, totalEarned: sql`${learnerPointBalances.totalEarned} + ${rewardPoints}`, totalAppliedMinutes: sql`${learnerPointBalances.totalAppliedMinutes} + ${rewardPoints}` } });
+  return { success: true, rewardPoints, appliedMinutes: rewardPoints };
+}
+
+export async function claimAllMissions(pin: string) {
+  const status = await getMissionStatus(pin);
+  const claimable = [...status.daily, ...status.monthly].filter(item => item.claimable);
+  let points = 0;
+  for (const item of claimable) points += (await claimMission(pin, item.id)).rewardPoints;
+  return { success: true, rewardPoints: points, appliedMinutes: points, claimedCount: claimable.length };
 }
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -246,12 +398,14 @@ export async function loginLearner(pin: string) {
   const existing = await db.select().from(learners).where(eq(learners.pinHash, hashed)).limit(1);
   if (existing[0]) {
     await db.update(learners).set({ lastSignedIn: new Date() }).where(eq(learners.id, existing[0].id));
+    await recordMissionEventForLearner(existing[0].id, "login", "english", `login-${appDateString()}`);
     return existing[0];
   }
   const created = await db.insert(learners).values({ pinHash: hashed }).$returningId();
   const learnerId = created[0]?.id;
   if (!learnerId) throw new Error("Failed to create learner");
   const learner = await db.select().from(learners).where(eq(learners.id, learnerId)).limit(1);
+  if (learner[0]) await recordMissionEventForLearner(learner[0].id, "login", "english", `login-${appDateString()}`);
   return learner[0];
 }
 
@@ -393,6 +547,7 @@ export async function recordReview(pin: string, entryId: number, correct: boolea
     nextReviewAt: nextReviewDate(correct ? correctCount - 1 : 0, correct, now),
   }).onDuplicateKeyUpdate({ set: { correctCount, incorrectCount, strength, lastReviewedAt: now, nextReviewAt: nextReviewDate(correct ? correctCount - 1 : 0, correct, now) } });
   await db.insert(studySessions).values({ learnerId: learner.id, seconds: Math.max(1, seconds) });
+  await recordMissionEventForLearner(learner.id, "answer", "english");
 }
 
 export async function recordTimerSession(pin: string, seconds: number) {
@@ -455,7 +610,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   const books = await listAccessibleWordBooks(pin, category);
   const bookIds = books.map(book => book.id);
   const activeSince = new Date(Date.now() - 15 * 60_000);
-  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages] = await Promise.all([
+  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages, pointBalances] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)) : Promise.resolve([]),
     db.select().from(studyProgress).where(eq(studyProgress.learnerId, learner.id)),
     db.select().from(studySessions).where(eq(studySessions.learnerId, learner.id)).orderBy(desc(studySessions.createdAt)),
@@ -466,11 +621,14 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, appDateString()), gte(recommendedTests.endDate, appDateString()))).orderBy(desc(recommendedTests.createdAt)).limit(20),
     db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
     db.select().from(monsterStages).orderBy(monsterStages.stage),
+    db.select().from(learnerPointBalances).where(eq(learnerPointBalances.learnerId, learner.id)).limit(1),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
   const relevantProgress = progress.filter(item => entryIds.has(item.entryId));
   const due = relevantProgress.filter(item => item.nextReviewAt && item.nextReviewAt <= new Date()).length;
-  const totalSeconds = sessions.reduce((sum, item) => sum + item.seconds, 0);
+  const baseStudySeconds = sessions.reduce((sum, item) => sum + item.seconds, 0);
+  const appliedMissionMinutes = pointBalances[0]?.totalAppliedMinutes ?? 0;
+  const totalSeconds = applyMissionMinutesToSeconds(baseStudySeconds, appliedMissionMinutes);
   const retention = relevantProgress.length ? Math.round(relevantProgress.reduce((sum, item) => sum + item.strength, 0) / relevantProgress.length) : 0;
   const learned = relevantProgress.filter(item => item.correctCount > 0).length;
   const monster = monsterEvolutionFromSeconds(totalSeconds);
@@ -484,7 +642,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     events,
     personalEvents,
     recommendations,
-    monster: { ...monster, totalSeconds, imageUrl: stageImages.find(item => item.stage === monster.stage)?.imageUrl ?? null, configuredStages: stageImages.length },
+    monster: { ...monster, totalSeconds, baseStudySeconds, appliedMissionMinutes, imageUrl: stageImages.find(item => item.stage === monster.stage)?.imageUrl ?? null, configuredStages: stageImages.length },
     mistakeEntryIds: relevantProgress.filter(item => item.incorrectCount > 0).sort((left, right) => right.incorrectCount - left.incorrectCount).map(item => item.entryId),
     reviewDates: relevantProgress.filter(item => item.nextReviewAt).map(item => item.nextReviewAt),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
@@ -531,7 +689,10 @@ export async function completeDailySelect(pin: string, category: StudyCategory) 
   const selectDate = appDateString();
   const attempt = (await db.select({ id: dailySelectAttempts.id, completedAt: dailySelectAttempts.completedAt }).from(dailySelectAttempts).where(and(eq(dailySelectAttempts.learnerId, learner.id), eq(dailySelectAttempts.category, category), eq(dailySelectAttempts.selectDate, selectDate))).limit(1))[0];
   if (!attempt) throw new Error("本日のAIセレクト10が見つかりません");
-  if (!attempt.completedAt) await db.update(dailySelectAttempts).set({ completedAt: new Date() }).where(eq(dailySelectAttempts.id, attempt.id));
+  if (!attempt.completedAt) {
+    await db.update(dailySelectAttempts).set({ completedAt: new Date() }).where(eq(dailySelectAttempts.id, attempt.id));
+    await recordMissionEventForLearner(learner.id, "daily_select", category, `daily-select-${category}-${selectDate}`);
+  }
   return { completed: true };
 }
 

@@ -147,4 +147,40 @@ export type Learner = typeof learners.$inferSelect;
 export type WordBook = typeof wordBooks.$inferSelect;
 export type WordEntry = typeof wordEntries.$inferSelect;
 export type MonsterStage = typeof monsterStages.$inferSelect;
+export const missionEvents = mysqlTable("missionEvents", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  eventType: varchar("eventType", { length: 40 }).notNull(),
+  category: mysqlEnum("category", ["english", "kanji"]).notNull().default("english"),
+  eventKey: varchar("eventKey", { length: 120 }).notNull(),
+  eventDate: varchar("eventDate", { length: 10 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("missionEvents_learner_key_unique").on(table.learnerId, table.eventKey),
+  index("missionEvents_learner_date_idx").on(table.learnerId, table.eventDate),
+]);
+
+export const missionClaims = mysqlTable("missionClaims", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  missionId: varchar("missionId", { length: 80 }).notNull(),
+  periodKey: varchar("periodKey", { length: 10 }).notNull(),
+  rewardPoints: int("rewardPoints").notNull().default(0),
+  claimedAt: timestamp("claimedAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("missionClaims_learner_mission_period_unique").on(table.learnerId, table.missionId, table.periodKey),
+  index("missionClaims_learner_period_idx").on(table.learnerId, table.periodKey),
+]);
+
+export const learnerPointBalances = mysqlTable("learnerPointBalances", {
+  learnerId: int("learnerId").primaryKey(),
+  balance: int("balance").notNull().default(0),
+  totalEarned: int("totalEarned").notNull().default(0),
+  totalAppliedMinutes: int("totalAppliedMinutes").notNull().default(0),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export type DailySelectAttempt = typeof dailySelectAttempts.$inferSelect;
+export type MissionEvent = typeof missionEvents.$inferSelect;
+export type MissionClaim = typeof missionClaims.$inferSelect;
+export type LearnerPointBalance = typeof learnerPointBalances.$inferSelect;
