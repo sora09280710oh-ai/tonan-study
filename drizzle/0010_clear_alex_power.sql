@@ -1,0 +1,1 @@
+ALTER TABLE `learners` ADD `monsterStage` int DEFAULT 1 NOT NULL;

@@ -55,6 +55,21 @@ export function monsterEvolutionFromSeconds(totalSeconds: number) {
   return { stage, totalStages: MONSTER_STAGE_COUNT, nextStageAtSeconds, secondsToNext: nextStageAtSeconds === null ? 0 : Math.max(0, nextStageAtSeconds - totalSeconds) };
 }
 
+export function monsterManualProgressFromSeconds(totalSeconds: number, storedStage = 1) {
+  const unlocked = monsterEvolutionFromSeconds(totalSeconds);
+  const stage = Math.max(1, Math.min(storedStage, unlocked.stage, MONSTER_STAGE_COUNT));
+  const secondsPerStage = MONSTER_HOURS_PER_STAGE * 3600;
+  const nextStageAtSeconds = stage < MONSTER_STAGE_COUNT ? stage * secondsPerStage : null;
+  return {
+    stage,
+    totalStages: MONSTER_STAGE_COUNT,
+    unlockedStage: unlocked.stage,
+    canEvolve: stage < unlocked.stage,
+    nextStageAtSeconds,
+    secondsToNext: nextStageAtSeconds === null ? 0 : Math.max(0, nextStageAtSeconds - totalSeconds),
+  };
+}
+
 export function selectDailyEntries<T>(entries: T[], count = DAILY_SELECT_QUESTION_COUNT, random = Math.random) {
   const selected = [...entries];
   for (let index = selected.length - 1; index > 0; index -= 1) {
@@ -631,7 +646,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   const totalSeconds = applyMissionMinutesToSeconds(baseStudySeconds, appliedMissionMinutes);
   const retention = relevantProgress.length ? Math.round(relevantProgress.reduce((sum, item) => sum + item.strength, 0) / relevantProgress.length) : 0;
   const learned = relevantProgress.filter(item => item.correctCount > 0).length;
-  const monster = monsterEvolutionFromSeconds(totalSeconds);
+  const monster = monsterManualProgressFromSeconds(totalSeconds, learner.monsterStage);
   return {
     learner: { id: learner.id, revivalTickets: learner.revivalTickets },
     books,
@@ -647,6 +662,23 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     reviewDates: relevantProgress.filter(item => item.nextReviewAt).map(item => item.nextReviewAt),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
   };
+}
+
+export async function evolveMonster(pin: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const [sessions, pointBalances] = await Promise.all([
+    db.select({ seconds: studySessions.seconds }).from(studySessions).where(eq(studySessions.learnerId, learner.id)),
+    db.select({ totalAppliedMinutes: learnerPointBalances.totalAppliedMinutes }).from(learnerPointBalances).where(eq(learnerPointBalances.learnerId, learner.id)).limit(1),
+  ]);
+  const baseStudySeconds = sessions.reduce((sum, item) => sum + item.seconds, 0);
+  const totalSeconds = applyMissionMinutesToSeconds(baseStudySeconds, pointBalances[0]?.totalAppliedMinutes ?? 0);
+  const monster = monsterManualProgressFromSeconds(totalSeconds, learner.monsterStage);
+  if (!monster.canEvolve) throw new Error("進化できる学習時間にまだ到達していません");
+  const nextStage = monster.stage + 1;
+  await db.update(learners).set({ monsterStage: nextStage }).where(eq(learners.id, learner.id));
+  return { stage: nextStage, unlockedStage: monster.unlockedStage, totalSeconds };
 }
 
 export async function getDailySelectStatus(pin: string) {
