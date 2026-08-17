@@ -7,6 +7,7 @@ import {
   cardSets,
   learnerEvents,
   learners,
+  monsterStages,
   recommendedTests,
   studyProgress,
   studySessions,
@@ -18,6 +19,7 @@ import {
 import { calculateStreak, nextReviewDate, nextStrength } from "./studyLogic";
 import { ENV } from "./_core/env";
 import { invokeLLM } from "./_core/llm";
+import { storagePut } from "./storage";
 
 export type StudyCategory = "english" | "kanji";
 type EntryDraft = { front: string; back: string; writingAnswer?: string | null; importBatchId?: string | null };
@@ -33,6 +35,15 @@ export type KanjiAiGrade = {
   }>;
 };
 export type KanjiGradingStrictness = "standard" | "strict";
+export const MONSTER_STAGE_COUNT = 13;
+export const MONSTER_HOURS_PER_STAGE = 20;
+
+export function monsterEvolutionFromSeconds(totalSeconds: number) {
+  const secondsPerStage = MONSTER_HOURS_PER_STAGE * 3600;
+  const stage = Math.min(MONSTER_STAGE_COUNT, Math.floor(Math.max(0, totalSeconds) / secondsPerStage) + 1);
+  const nextStageAtSeconds = stage < MONSTER_STAGE_COUNT ? stage * secondsPerStage : null;
+  return { stage, totalStages: MONSTER_STAGE_COUNT, nextStageAtSeconds, secondsToNext: nextStageAtSeconds === null ? 0 : Math.max(0, nextStageAtSeconds - totalSeconds) };
+}
 
 export function parseKanjiAiGrade(raw: string): KanjiAiGrade {
   try {
@@ -426,7 +437,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   const books = await listAccessibleWordBooks(pin, category);
   const bookIds = books.map(book => book.id);
   const activeSince = new Date(Date.now() - 15 * 60_000);
-  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions] = await Promise.all([
+  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)) : Promise.resolve([]),
     db.select().from(studyProgress).where(eq(studyProgress.learnerId, learner.id)),
     db.select().from(studySessions).where(eq(studySessions.learnerId, learner.id)).orderBy(desc(studySessions.createdAt)),
@@ -436,6 +447,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(learnerEvents).where(eq(learnerEvents.learnerId, learner.id)).orderBy(learnerEvents.eventDate),
     db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, appDateString()), gte(recommendedTests.endDate, appDateString()))).orderBy(desc(recommendedTests.createdAt)).limit(20),
     db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
+    db.select().from(monsterStages).orderBy(monsterStages.stage),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
   const relevantProgress = progress.filter(item => entryIds.has(item.entryId));
@@ -443,6 +455,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   const totalSeconds = sessions.reduce((sum, item) => sum + item.seconds, 0);
   const retention = relevantProgress.length ? Math.round(relevantProgress.reduce((sum, item) => sum + item.strength, 0) / relevantProgress.length) : 0;
   const learned = relevantProgress.filter(item => item.correctCount > 0).length;
+  const monster = monsterEvolutionFromSeconds(totalSeconds);
   return {
     learner: { id: learner.id, revivalTickets: learner.revivalTickets },
     books,
@@ -453,6 +466,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     events,
     personalEvents,
     recommendations,
+    monster: { ...monster, totalSeconds, imageUrl: stageImages.find(item => item.stage === monster.stage)?.imageUrl ?? null, configuredStages: stageImages.length },
     mistakeEntryIds: relevantProgress.filter(item => item.incorrectCount > 0).sort((left, right) => right.incorrectCount - left.incorrectCount).map(item => item.entryId),
     reviewDates: relevantProgress.filter(item => item.nextReviewAt).map(item => item.nextReviewAt),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
@@ -474,13 +488,30 @@ export async function getAdminOverview(password: string) {
   await ensureStandardBooks();
   const books = await db.select().from(wordBooks).where(eq(wordBooks.kind, "standard")).orderBy(wordBooks.category);
   const bookIds = books.map(book => book.id);
-  const [entries, announcementList, tests, events] = await Promise.all([
+  const [entries, announcementList, tests, events, stageImages] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)).orderBy(wordEntries.entryNo) : Promise.resolve([]),
     db.select().from(announcements).orderBy(desc(announcements.createdAt)),
     db.select().from(recommendedTests).orderBy(desc(recommendedTests.createdAt)),
     db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
+    db.select().from(monsterStages).orderBy(monsterStages.stage),
   ]);
-  return { books, entries, announcements: announcementList, tests, events };
+  return { books, entries, announcements: announcementList, tests, events, monsterStages: stageImages };
+}
+
+export async function saveMonsterStage(password: string, stage: number, imageDataUrl: string) {
+  await requireAdminPassword(password);
+  if (!Number.isInteger(stage) || stage < 1 || stage > MONSTER_STAGE_COUNT) throw new Error("モンスター段階は1〜13で指定してください");
+  const match = /^data:(image\/(?:png|jpeg|webp));base64,([\s\S]+)$/.exec(imageDataUrl);
+  if (!match) throw new Error("PNG、JPEG、WebP形式の画像を選択してください");
+  const mimeType = match[1];
+  const bytes = Buffer.from(match[2], "base64");
+  if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new Error("画像は5MB以下で指定してください");
+  const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+  const stored = await storagePut(`monster-stages/stage-${stage}.${extension}`, bytes, mimeType);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(monsterStages).values({ stage, imageKey: stored.key, imageUrl: stored.url }).onDuplicateKeyUpdate({ set: { imageKey: stored.key, imageUrl: stored.url } });
+  return { stage, imageUrl: stored.url };
 }
 
 export async function replaceStandardEntries(password: string, bookId: number, entries: EntryDraft[]) {

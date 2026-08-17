@@ -121,8 +121,16 @@ export const learnerEvents = mysqlTable("learnerEvents", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [index("learnerEvents_learner_date_idx").on(table.learnerId, table.eventDate)]);
 
+export const monsterStages = mysqlTable("monsterStages", {
+  stage: int("stage").primaryKey(),
+  imageKey: varchar("imageKey", { length: 512 }).notNull(),
+  imageUrl: varchar("imageUrl", { length: 1024 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Learner = typeof learners.$inferSelect;
 export type WordBook = typeof wordBooks.$inferSelect;
 export type WordEntry = typeof wordEntries.$inferSelect;
+export type MonsterStage = typeof monsterStages.$inferSelect;

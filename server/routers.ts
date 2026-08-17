@@ -31,6 +31,7 @@ import {
   replacePersonalEntries,
   saveStandardEntry,
   savePersonalEntry,
+  saveMonsterStage,
   useRevivalTicket,
   verifyAdminPassword,
 } from "./db";
@@ -87,6 +88,7 @@ export const appRouter = router({
     deleteAnnouncement: publicProcedure.input(z.object({ password: z.string(), announcementId: z.number().int().positive() })).mutation(({ input }) => deleteAnnouncement(input.password, input.announcementId)),
     publishRecommendedTest: publicProcedure.input(z.object({ password: z.string(), title: z.string().trim().min(1).max(160), category, bookId: z.number().int().positive(), startNo: z.number().int().positive(), endNo: z.number().int().positive(), questionCount: z.number().int().min(1).max(100), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })).mutation(({ input }) => publishRecommendedTest(input.password, input)),
     addCalendarEvent: publicProcedure.input(z.object({ password: z.string(), eventDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), title: z.string().trim().min(1).max(160), category: z.enum(["english", "kanji", "both"]) })).mutation(({ input }) => addCalendarEvent(input.password, input)),
+    saveMonsterStage: publicProcedure.input(z.object({ password: z.string(), stage: z.number().int().min(1).max(13), imageDataUrl: z.string().min(100).max(7_000_000) })).mutation(({ input }) => saveMonsterStage(input.password, input.stage, input.imageDataUrl)),
   }),
 });
 

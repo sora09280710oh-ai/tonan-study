@@ -43,6 +43,13 @@
       "when": 1786902953424,
       "tag": "0005_safe_husk",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1786966996253,
+      "tag": "0006_melted_fabian_cortez",
+      "breakpoints": true
     }
   ]
 }
