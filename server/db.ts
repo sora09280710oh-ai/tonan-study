@@ -472,6 +472,13 @@ export async function publishAnnouncement(password: string, title: string, body:
   await db.insert(announcements).values({ title, body });
 }
 
+export async function deleteAnnouncement(password: string, announcementId: number) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.delete(announcements).where(eq(announcements.id, announcementId));
+}
+
 export async function publishRecommendedTest(password: string, input: { title: string; category: StudyCategory; bookId: number; startNo: number; endNo: number; questionCount: number; startDate: string; endDate: string }) {
   await requireAdminPassword(password);
   const db = await getDb();
