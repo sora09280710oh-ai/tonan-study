@@ -46,7 +46,7 @@ const DAILY_MISSION_IDS = ["daily-login", "daily-ai-english", "daily-ai-kanji", 
 export const DAILY_REWARD_POINTS = 1;
 export const DAILY_ALL_CLEAR_REWARD = 5;
 export const MONTHLY_ALL_CLEAR_REWARD = 30;
-const JST_MONTH_FORMAT = /^\\d{4}-\\d{2}$/;
+const JST_MONTH_FORMAT = /^\d{4}-\d{2}$/;
 
 export function monsterEvolutionFromSeconds(totalSeconds: number) {
   const secondsPerStage = MONSTER_HOURS_PER_STAGE * 3600;
