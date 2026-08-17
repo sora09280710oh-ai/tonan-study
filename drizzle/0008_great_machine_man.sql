@@ -1,0 +1,1 @@
+ALTER TABLE `dailySelectAttempts` ADD `completedAt` timestamp;

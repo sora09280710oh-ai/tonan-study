@@ -5,6 +5,7 @@ import {
   announcements,
   calendarEvents,
   cardSets,
+  dailySelectAttempts,
   learnerEvents,
   learners,
   monsterStages,
@@ -37,12 +38,29 @@ export type KanjiAiGrade = {
 export type KanjiGradingStrictness = "standard" | "strict";
 export const MONSTER_STAGE_COUNT = 13;
 export const MONSTER_HOURS_PER_STAGE = 20;
+export const DAILY_SELECT_QUESTION_COUNT = 10;
 
 export function monsterEvolutionFromSeconds(totalSeconds: number) {
   const secondsPerStage = MONSTER_HOURS_PER_STAGE * 3600;
   const stage = Math.min(MONSTER_STAGE_COUNT, Math.floor(Math.max(0, totalSeconds) / secondsPerStage) + 1);
   const nextStageAtSeconds = stage < MONSTER_STAGE_COUNT ? stage * secondsPerStage : null;
   return { stage, totalStages: MONSTER_STAGE_COUNT, nextStageAtSeconds, secondsToNext: nextStageAtSeconds === null ? 0 : Math.max(0, nextStageAtSeconds - totalSeconds) };
+}
+
+export function selectDailyEntries<T>(entries: T[], count = DAILY_SELECT_QUESTION_COUNT, random = Math.random) {
+  const selected = [...entries];
+  for (let index = selected.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [selected[index], selected[swapIndex]] = [selected[swapIndex], selected[index]];
+  }
+  return selected.slice(0, Math.min(count, selected.length));
+}
+
+function parseDailyEntryIds(raw: string) {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((value): value is number => Number.isInteger(value) && value > 0) : [];
+  } catch { return []; }
 }
 
 export function parseKanjiAiGrade(raw: string): KanjiAiGrade {
@@ -471,6 +489,50 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     reviewDates: relevantProgress.filter(item => item.nextReviewAt).map(item => item.nextReviewAt),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
   };
+}
+
+export async function getDailySelectStatus(pin: string) {
+  const learner = await learnerForPin(pin);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const selectDate = appDateString();
+  const attempts = await db.select().from(dailySelectAttempts).where(and(eq(dailySelectAttempts.learnerId, learner.id), eq(dailySelectAttempts.selectDate, selectDate)));
+  return { selectDate, categories: (["english", "kanji"] as StudyCategory[]).map(category => { const attempt = attempts.find(item => item.category === category); return { category, attempted: Boolean(attempt?.completedAt), resumable: Boolean(attempt && !attempt.completedAt) }; }) };
+}
+
+export async function startDailySelect(pin: string, category: StudyCategory) {
+  const learner = await learnerForPin(pin);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const selectDate = appDateString();
+  const existing = (await db.select().from(dailySelectAttempts).where(and(eq(dailySelectAttempts.learnerId, learner.id), eq(dailySelectAttempts.category, category), eq(dailySelectAttempts.selectDate, selectDate))).limit(1))[0];
+  if (existing?.completedAt) throw new Error("このカテゴリーのAIセレクト10は本日すでに受験済みです");
+  if (existing) {
+    const entryIds = parseDailyEntryIds(existing.entryIds);
+    const savedEntries = entryIds.length ? await db.select().from(wordEntries).where(inArray(wordEntries.id, entryIds)) : [];
+    const byId = new Map(savedEntries.map(entry => [entry.id, entry]));
+    const entries = entryIds.map(entryId => byId.get(entryId)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+    if (entries.length !== DAILY_SELECT_QUESTION_COUNT) throw new Error("保存済みのAIセレクト10を再開できません。管理者へお問い合わせください");
+    return { category, selectDate, entries, resumed: true };
+  }
+  const books = await db.select({ id: wordBooks.id }).from(wordBooks).where(and(eq(wordBooks.kind, "standard"), eq(wordBooks.category, category)));
+  if (!books.length) throw new Error("2026年度標準単語帳が見つかりません");
+  const entries = await db.select().from(wordEntries).where(inArray(wordEntries.bookId, books.map(book => book.id)));
+  if (entries.length < DAILY_SELECT_QUESTION_COUNT) throw new Error("AIセレクト10には標準単語帳へ10語以上の登録が必要です");
+  const selected = selectDailyEntries(entries);
+  await db.insert(dailySelectAttempts).values({ learnerId: learner.id, category, selectDate, entryIds: JSON.stringify(selected.map(entry => entry.id)) });
+  return { category, selectDate, entries: selected, resumed: false };
+}
+
+export async function completeDailySelect(pin: string, category: StudyCategory) {
+  const learner = await learnerForPin(pin);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const selectDate = appDateString();
+  const attempt = (await db.select({ id: dailySelectAttempts.id, completedAt: dailySelectAttempts.completedAt }).from(dailySelectAttempts).where(and(eq(dailySelectAttempts.learnerId, learner.id), eq(dailySelectAttempts.category, category), eq(dailySelectAttempts.selectDate, selectDate))).limit(1))[0];
+  if (!attempt) throw new Error("本日のAIセレクト10が見つかりません");
+  if (!attempt.completedAt) await db.update(dailySelectAttempts).set({ completedAt: new Date() }).where(eq(dailySelectAttempts.id, attempt.id));
+  return { completed: true };
 }
 
 export async function verifyAdminPassword(password: string) {

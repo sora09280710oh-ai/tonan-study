@@ -128,9 +128,23 @@ export const monsterStages = mysqlTable("monsterStages", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
+export const dailySelectAttempts = mysqlTable("dailySelectAttempts", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  category: mysqlEnum("category", ["english", "kanji"]).notNull(),
+  selectDate: varchar("selectDate", { length: 10 }).notNull(),
+  entryIds: text("entryIds").notNull(),
+  completedAt: timestamp("completedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("dailySelect_learner_category_date_unique").on(table.learnerId, table.category, table.selectDate),
+  index("dailySelect_learner_date_idx").on(table.learnerId, table.selectDate),
+]);
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Learner = typeof learners.$inferSelect;
 export type WordBook = typeof wordBooks.$inferSelect;
 export type WordEntry = typeof wordEntries.$inferSelect;
 export type MonsterStage = typeof monsterStages.$inferSelect;
+export type DailySelectAttempt = typeof dailySelectAttempts.$inferSelect;
