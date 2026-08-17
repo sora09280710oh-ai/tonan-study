@@ -175,4 +175,11 @@
       max-width: 1280px; /* Standard content width */
     }
   }
+
+  /* カレンダー横スワイプ：育成・ミッションは常に同じ表示高さを保つ */
+  .min-h-\[22rem\].w-1\/3.px-1,
+  .min-h-\[22rem\].w-1\/3.overflow-hidden.pl-1 {
+    height: auto !important;
+    min-height: 22rem !important;
+  }
 }
