@@ -215,3 +215,4 @@
 - [x] ミッション報酬受取後にgetDashboardのtotalSeconds・stage・appliedMissionMinutesが更新される統合テストを追加する（育成時間反映関数と進化閾値を検証）
 - [x] 公開版missionStatusのJST月正規表現不具合を修正し、APIの月判定500エラーを解消する
 - [x] JST修正後に型検査・Vitest 22件・本番ビルドを再実行する
+- [x] ミッションAPIのエラー状態に再試行ボタンを追加し、公開環境の一時障害から復帰できるようにする

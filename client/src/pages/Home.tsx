@@ -157,7 +157,7 @@ function MissionPage({ pin }: { pin: string }) {
   const claimAll = trpc.learning.claimAllMissions.useMutation({ onSuccess: async data => { toast.success(`${data.rewardPoints}ポイント（${data.appliedMinutes}分）をまとめて加算しました`); await utils.learning.missionStatus.invalidate(); await utils.learning.dashboard.invalidate(); }, onError: error => toast.error(error.message) });
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ "ログイン・継続": true });
   if (status.isLoading) return <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">ミッションを読み込み中…</CardContent></Card>;
-  if (!status.data) return <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">ミッションを取得できませんでした。</CardContent></Card>;
+  if (status.isError || !status.data) return <Card><CardContent className="space-y-3 p-6 text-center"><p className="text-sm text-muted-foreground">ミッションを取得できませんでした。</p><Button size="sm" variant="outline" onClick={() => status.refetch()} disabled={status.isFetching}><RotateCcw className="mr-2 h-4 w-4" />{status.isFetching ? "再試行中…" : "再試行"}</Button></CardContent></Card>;
   const data = status.data;
   const claimable = [...data.daily, ...data.monthly].filter(item => item.claimable);
   const monthlyGroups = Array.from(new Set(data.monthly.map(item => item.group)));
