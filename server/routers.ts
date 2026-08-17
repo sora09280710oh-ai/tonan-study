@@ -43,6 +43,7 @@ import {
   useRevivalTicket,
   verifyAdminPassword,
 } from "./db";
+import { generateStudyJournal, STUDY_JOURNAL_LEVELS } from "./studyJournal";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
@@ -70,6 +71,7 @@ export const appRouter = router({
     startDailySelect: publicProcedure.input(z.object({ pin, category })).mutation(({ input }) => startDailySelect(input.pin, input.category)),
     completeDailySelect: publicProcedure.input(z.object({ pin, category })).mutation(({ input }) => completeDailySelect(input.pin, input.category)),
     evolveMonster: publicProcedure.input(z.object({ pin })).mutation(({ input }) => evolveMonster(input.pin)),
+    generateStudyJournal: publicProcedure.input(z.object({ pin, category, level: z.enum(STUDY_JOURNAL_LEVELS) })).mutation(({ input }) => generateStudyJournal(input.pin, input.category, input.level)),
     login: publicProcedure.input(z.object({ pin })).mutation(({ input }) => loginLearner(input.pin)),
     dashboard: publicProcedure.input(z.object({ pin, category })).query(({ input }) => getDashboard(input.pin, input.category)),
     books: publicProcedure.input(z.object({ pin, category })).query(({ input }) => listAccessibleWordBooks(input.pin, input.category)),

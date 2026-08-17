@@ -428,6 +428,14 @@ async function learnerForPin(pin: string) {
   return loginLearner(pin);
 }
 
+export async function requireExistingLearner(pin: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = (await db.select().from(learners).where(eq(learners.pinHash, pinHash(pin))).limit(1))[0];
+  if (!learner) throw new Error("StudyJournalを使うには、先にPINで学習を開始してください");
+  return learner;
+}
+
 async function accessibleBook(bookId: number, learnerId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
