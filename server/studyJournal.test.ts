@@ -7,6 +7,7 @@ describe("StudyJournal教材生成", () => {
     expect(prompt).toContain("高校2年生");
     expect(prompt).toContain("English World Briefing");
     expect(prompt).toContain("Japanese translation");
+    expect(prompt).toContain("meaning and explanation MUST be natural Japanese");
     expect(prompt).toContain("190-240 word");
     expect(prompt).toContain("4-5 annotations");
   });
@@ -34,6 +35,16 @@ describe("StudyJournal教材生成", () => {
 
   it("出典がない生成結果を拒否する", () => {
     expect(() => normalizeStudyJournal({ title: "x", passage: "This passage has enough length for the validation but no valid external source details are included.", translation: "訳文", annotations: [{ kind: "word", term: "passage", meaning: "文章", explanation: "説明", onyomi: "", kunyomi: "" }], sources: [] }, "english", "大学生")).toThrow("出典または学習解説");
+  });
+
+  it("英語版で単語・文法の解説が英語だけの場合は再生成を促す", () => {
+    expect(() => normalizeStudyJournal({
+      title: "World Briefing",
+      passage: "Leaders discussed a new agreement after a major meeting. The agreement could affect trade and regional cooperation.",
+      translation: "各国の指導者は合意について話し合いました。",
+      annotations: [{ kind: "word", term: "agreement", meaning: "agreement", explanation: "A noun for a shared decision.", onyomi: "", kunyomi: "" }],
+      sources: [{ title: "Example report", url: "https://example.com/report", publisher: "Example News", publishedAt: "2026-08-18 09:00 UTC" }],
+    }, "english", "高校1年生")).toThrow("英語版の解説は日本語");
   });
 
   it("RSSのリンクを抽出し、GUIDをリンクの予備情報として使う", () => {
