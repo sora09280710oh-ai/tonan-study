@@ -67,6 +67,17 @@ describe("StudyJournal教材生成", () => {
     expect(next[0]?.url).not.toBe(first[0]?.url);
   });
 
+  it("通常生成は公開日時の新しい記事を優先し、候補を使うと過去記事も選べる", () => {
+    const sources = [
+      { title: "Old", url: "https://example.com/old", publisher: "Example News", publishedAt: "2026-08-01T09:00:00Z" },
+      { title: "Newest", url: "https://example.com/newest", publisher: "Example News", publishedAt: "2026-08-18T09:00:00Z" },
+      { title: "Middle", url: "https://example.com/middle", publisher: "Example News", publishedAt: "2026-08-10T09:00:00Z" },
+    ];
+    expect(selectStudyJournalSources(sources, 0)[0]?.title).toBe("Newest");
+    expect(selectStudyJournalSources(sources, 1)[0]?.title).toBe("Middle");
+    expect(selectStudyJournalSources(sources, 2)[0]?.title).toBe("Old");
+  });
+
   it("毎日新聞RSSのRSS 1.0形式から日本語の見出しと日時を抽出する", () => {
     const sources = parseMainichiRss(`<rdf:RDF><item rdf:about="https://mainichi.jp/articles/example"><title>直近の新聞記事</title><link>https://mainichi.jp/articles/example</link><dc:date>2026-08-18T12:00:00+09:00</dc:date></item></rdf:RDF>`);
     expect(sources).toEqual([{ title: "直近の新聞記事", url: "https://mainichi.jp/articles/example", publisher: "毎日新聞", publishedAt: "2026-08-18T12:00:00+09:00" }]);

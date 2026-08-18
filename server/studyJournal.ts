@@ -103,7 +103,12 @@ export function parseMainichiRss(xml: string): NewsSource[] {
 
 export function selectStudyJournalSources(sources: NewsSource[], turn = 0): NewsSource[] {
   if (!sources.length) return [];
-  return [sources[turn % sources.length]!];
+  const recentFirst = sources.map((source, index) => ({ source, index, timestamp: Date.parse(source.publishedAt) })).sort((left, right) => {
+    const leftTime = Number.isFinite(left.timestamp) ? left.timestamp : Number.NEGATIVE_INFINITY;
+    const rightTime = Number.isFinite(right.timestamp) ? right.timestamp : Number.NEGATIVE_INFINITY;
+    return rightTime - leftTime || left.index - right.index;
+  });
+  return [recentFirst[turn % recentFirst.length]!.source];
 }
 
 export function selectTodayStudyJournalSources(sources: NewsSource[], articleDate = appDateString()): NewsSource[] {
@@ -158,7 +163,7 @@ export function buildStudyJournalPrompt(category: StudyJournalCategory, level: S
     ? "Write a 190-240 word ORIGINAL English World Briefing. The reading must be fully in English. After the reader finishes, provide a concise natural Japanese translation. Choose 4-5 annotations: important vocabulary uses kind='word', and useful sentence patterns use kind='grammar'. The term may be English, but every annotation meaning and explanation MUST be natural Japanese; do not write annotation explanations in English. For non-kanji annotations, onyomi and kunyomi must be empty strings."
     : "Write a 300-420 Japanese-character ORIGINAL 世界の出来事の読解文. Use more kanji than ordinary casual Japanese while keeping the specified learner level. After the reader finishes, provide a concise simple Japanese explanation of the passage in translation. Choose 4-5 important kanji or compound words using kind='kanji'; include accurate onyomi and kunyomi when they exist. For readings that do not normally use one type, use an empty string.";
   const sourceDigest = sources.map((source, index) => `${index + 1}. title=${source.title}\npublisher=${source.publisher}\npublishedAt=${source.publishedAt}\nurl=${source.url}`).join("\n\n");
-  return `Today is ${now.toISOString()}. Create an educational reading using ONLY the following recent news headline as the central topic. This is one article and one topic only: do not add other news topics. State only details supported by the headline; when details are unavailable, explain the theme in a general educational way without inventing facts. Do not copy the headline or any article sentence: write a fresh learning article. In the sources output, include this exact URL, publisher, and time. The learner level is ${level}. ${languageInstruction} The annotations' term text must occur exactly in the passage. Return only data matching the requested schema.\n\nRECENT NEWS HEADLINE:\n${sourceDigest}`;
+  return `Today is ${now.toISOString()}. Create an educational reading using ONLY the following supplied news headline as the central topic. The source may be a recent report or an older report selected from the available archive. This is one article and one topic only: do not add other news topics. State only details supported by the headline; when details are unavailable, explain the theme in a general educational way without inventing facts. Do not copy the headline or any article sentence: write a fresh learning article. In the sources output, include this exact URL, publisher, and time. The learner level is ${level}. ${languageInstruction} The annotations' term text must occur exactly in the passage. Return only data matching the requested schema.\n\nNEWS HEADLINE:\n${sourceDigest}`;
 }
 
 function asText(value: unknown) {
