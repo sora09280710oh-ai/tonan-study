@@ -16,8 +16,10 @@ describe("StudyVerse・管理者アカウント管理", () => {
     expect(router).toContain("saveCalendarDisplaySetting");
     expect(router).toContain("accountDetail");
     expect(router).toContain("resetRevivalTickets");
+    expect(router).toContain("resetAccountPin");
     expect(source).toContain("育成・ミッション画面の表示");
     expect(source).toContain("復活チケットを2枚に戻す");
+    expect(source).toContain("PINコードを再設定");
   });
 
   it("表示設定をオフにすると、カレンダーの横スワイプ拡張を描画しない", () => {

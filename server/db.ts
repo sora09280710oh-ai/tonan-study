@@ -1182,6 +1182,20 @@ export async function resetAdminRevivalTickets(password: string, learnerId: numb
   return { learnerId, revivalTickets: 2 };
 }
 
+export async function resetAdminAccountPin(password: string, learnerId: number, newPin: string) {
+  await requireAdminPassword(password);
+  if (!/^\d{4}$/.test(newPin)) throw new Error("PINコードは4桁の数字で指定してください");
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const account = (await db.select({ id: learners.id }).from(learners).where(eq(learners.id, learnerId)).limit(1))[0];
+  if (!account) throw new Error("アカウントが見つかりません");
+  const hashed = pinHash(newPin);
+  const owner = (await db.select({ id: learners.id }).from(learners).where(eq(learners.pinHash, hashed)).limit(1))[0];
+  if (owner && owner.id !== learnerId) throw new Error("そのPINコードは別のアカウントで使用されています");
+  await db.update(learners).set({ pinHash: hashed }).where(eq(learners.id, learnerId));
+  return { learnerId };
+}
+
 export async function saveMonsterStage(password: string, stage: number, imageDataUrl: string) {
   await requireAdminPassword(password);
   if (!Number.isInteger(stage) || stage < 1 || stage > MONSTER_STAGE_COUNT) throw new Error("モンスター段階は1〜13で指定してください");
