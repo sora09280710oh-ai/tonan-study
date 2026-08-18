@@ -993,6 +993,20 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   };
 }
 
+export async function listDueReviewEntries(pin: string, category: StudyCategory) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await requireExistingLearner(pin);
+  const books = await listAccessibleWordBooks(pin, category);
+  const bookIds = books.map(book => book.id);
+  if (!bookIds.length) return [];
+  const entries = await db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)).orderBy(wordEntries.entryNo);
+  if (!entries.length) return [];
+  const dueProgress = await db.select({ entryId: studyProgress.entryId, nextReviewAt: studyProgress.nextReviewAt }).from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), inArray(studyProgress.entryId, entries.map(entry => entry.id)), lte(studyProgress.nextReviewAt, new Date())));
+  const dueByEntryId = new Map(dueProgress.filter(item => item.nextReviewAt).map(item => [item.entryId, item.nextReviewAt!.getTime()]));
+  return entries.filter(entry => dueByEntryId.has(entry.id)).sort((left, right) => (dueByEntryId.get(left.id) ?? 0) - (dueByEntryId.get(right.id) ?? 0));
+}
+
 export async function evolveMonster(pin: string) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
