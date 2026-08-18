@@ -83,7 +83,7 @@ export function parseBbcWorldRss(xml: string): NewsSource[] {
       publisher: "BBC News",
       publishedAt: field(item, "pubDate"),
     };
-  }).filter(item => item.title && item.url.startsWith("https://") && item.publishedAt && !seen.has(item.url) && Boolean(seen.add(item.url))).slice(0, 5);
+  }).filter(item => item.title && item.url.startsWith("https://") && item.publishedAt && !seen.has(item.url) && Boolean(seen.add(item.url))).slice(0, 3);
 }
 
 async function fetchRecentWorldSources(): Promise<NewsSource[]> {
@@ -109,8 +109,8 @@ async function fetchRecentWorldSources(): Promise<NewsSource[]> {
 
 export function buildStudyJournalPrompt(category: StudyJournalCategory, level: StudyJournalLevel, sources: NewsSource[] = [], now = new Date()) {
   const languageInstruction = category === "english"
-    ? "Write a 260-340 word ORIGINAL English World Briefing. The reading must be fully in English. After the reader finishes, provide a natural Japanese translation. Choose 5-7 annotations: important vocabulary uses kind='word', and useful sentence patterns use kind='grammar'. For non-kanji annotations, onyomi and kunyomi must be empty strings."
-    : "Write a 380-560 Japanese-character ORIGINAL 世界の出来事の読解文. Use more kanji than ordinary casual Japanese while keeping the specified learner level. After the reader finishes, provide a simple Japanese explanation of the passage in translation. Choose 6-8 important kanji or compound words using kind='kanji'; include accurate onyomi and kunyomi when they exist. For readings that do not normally use one type, use an empty string.";
+    ? "Write a 190-240 word ORIGINAL English World Briefing. The reading must be fully in English. After the reader finishes, provide a concise natural Japanese translation. Choose 4-5 annotations: important vocabulary uses kind='word', and useful sentence patterns use kind='grammar'. For non-kanji annotations, onyomi and kunyomi must be empty strings."
+    : "Write a 300-420 Japanese-character ORIGINAL 世界の出来事の読解文. Use more kanji than ordinary casual Japanese while keeping the specified learner level. After the reader finishes, provide a concise simple Japanese explanation of the passage in translation. Choose 4-5 important kanji or compound words using kind='kanji'; include accurate onyomi and kunyomi when they exist. For readings that do not normally use one type, use an empty string.";
   const sourceDigest = sources.map((source, index) => `${index + 1}. title=${source.title}\npublisher=${source.publisher}\npublishedAt=${source.publishedAt}\nurl=${source.url}`).join("\n\n");
   return `Today is ${now.toISOString()}. Create an educational reading from the following current international-news headlines. Do not claim to cover every event in the world. State only details supported by these headlines; do not invent facts. Do not copy headline or article sentences: write a fresh learning summary. Keep these exact source URLs, publishers, and times in the sources output. The learner level is ${level}. ${languageInstruction} The annotations' term text must occur exactly in the passage. Return only data matching the requested schema.\n\nCURRENT NEWS CANDIDATES:\n${sourceDigest}`;
 }
@@ -153,18 +153,18 @@ export async function generateStudyJournal(pin: string, category: StudyJournalCa
   await requireExistingLearner(pin);
   const sources = await fetchRecentWorldSources();
   const generation = invokeLLM({
-    model: "gpt-5-mini",
+    model: "gemini-3-flash-preview",
     messages: [
       { role: "system", content: "You are a careful educational editor. Use only the supplied current-news candidates. Never fabricate events, sources, or publication times." },
       { role: "user", content: buildStudyJournalPrompt(category, level, sources) },
     ],
-    maxCompletionTokens: 1200,
-    reasoning: { effort: "minimal" },
+    maxTokens: 6000,
+    reasoningEffort: "low",
     outputSchema: journalSchema,
   });
   const response = await Promise.race([
     generation,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("StudyJournalの生成に時間がかかっています。もう一度お試しください")), 55_000)),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("StudyJournalの生成に時間がかかっています。通信状況を確認して、もう一度お試しください")), 45_000)),
   ]);
   const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
   if (typeof content !== "string") throw new Error("StudyJournalの生成内容を受け取れませんでした");

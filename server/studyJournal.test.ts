@@ -7,6 +7,8 @@ describe("StudyJournal教材生成", () => {
     expect(prompt).toContain("高校2年生");
     expect(prompt).toContain("English World Briefing");
     expect(prompt).toContain("Japanese translation");
+    expect(prompt).toContain("190-240 word");
+    expect(prompt).toContain("4-5 annotations");
   });
 
   it("漢字の指定では漢字読解と音読み・訓読みを要求する", () => {
@@ -15,6 +17,7 @@ describe("StudyJournal教材生成", () => {
     expect(prompt).toContain("世界の出来事の読解文");
     expect(prompt).toContain("onyomi");
     expect(prompt).toContain("kunyomi");
+    expect(prompt).toContain("300-420 Japanese-character");
   });
 
   it("実在URLの出典と本文中の注釈だけを教材として受け入れる", () => {
