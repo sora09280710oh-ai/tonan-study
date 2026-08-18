@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/mysql2";
 import { createHash, randomUUID } from "node:crypto";
 import {
   announcements,
+  appSettings,
   calendarEvents,
   cardSets,
   creatureStageImages,
@@ -959,7 +960,8 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   const books = await listAccessibleWordBooks(pin, category);
   const bookIds = books.map(book => book.id);
   const activeSince = new Date(Date.now() - 15 * 60_000);
-  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages, creatureRows, definitions, pointBalances, ticketUses] = await Promise.all([
+  await db.insert(appSettings).values({ id: 1, showCalendarExtras: 1 }).onDuplicateKeyUpdate({ set: { id: 1 } });
+  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages, creatureRows, definitions, pointBalances, ticketUses, settings] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)) : Promise.resolve([]),
     db.select().from(studyProgress).where(eq(studyProgress.learnerId, learner.id)),
     db.select().from(studySessions).where(eq(studySessions.learnerId, learner.id)).orderBy(desc(studySessions.createdAt)),
@@ -974,6 +976,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(eggDefinitions),
     db.select().from(learnerPointBalances).where(eq(learnerPointBalances.learnerId, learner.id)).limit(1),
     db.select({ eventDate: revivalTicketUses.eventDate }).from(revivalTicketUses).where(eq(revivalTicketUses.learnerId, learner.id)).orderBy(revivalTicketUses.eventDate),
+    db.select().from(appSettings).where(eq(appSettings.id, 1)).limit(1),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
   const relevantProgress = progress.filter(item => entryIds.has(item.entryId));
@@ -1001,6 +1004,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     monster: { ...monster, id: activeCreature.id, eggDefinitionId: activeCreature.eggDefinitionId, name: definitionsById.get(activeCreature.eggDefinitionId)?.name ?? "生物", totalSeconds: activeGrowthSeconds, lifetimeTotalSeconds: totalSeconds, baseStudySeconds, appliedMissionMinutes, imageUrl: imageFor(activeCreature.eggDefinitionId, monster.stage), configuredStages: stageImages.filter(image => image.eggDefinitionId === activeCreature.eggDefinitionId).length, canStartNewCreature: activeCreature.stage >= MONSTER_STAGE_COUNT },
     monsterHistory,
     revivalTicketDates: ticketUses.map(item => item.eventDate),
+    showCalendarExtras: (settings[0]?.showCalendarExtras ?? 1) === 1,
     mistakeEntryIds: relevantProgress.filter(item => item.incorrectCount > 0).sort((left, right) => right.incorrectCount - left.incorrectCount).map(item => item.entryId),
     reviewDates: relevantProgress.filter(item => item.nextReviewAt).map(item => item.nextReviewAt),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
@@ -1111,6 +1115,71 @@ export async function getAdminOverview(password: string) {
     db.select().from(creatureStageImages).orderBy(creatureStageImages.eggDefinitionId, creatureStageImages.stage),
   ]);
   return { books, entries, announcements: announcementList, tests, events, monsterStages: stageImages, eggDefinitions: eggs, normalMissions: normalMissionList, creatureStageImages: creatureImages };
+}
+
+export async function getAdminCalendarDisplaySetting(password: string) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(appSettings).values({ id: 1, showCalendarExtras: 1 }).onDuplicateKeyUpdate({ set: { id: 1 } });
+  const setting = (await db.select().from(appSettings).where(eq(appSettings.id, 1)).limit(1))[0];
+  return { showCalendarExtras: (setting?.showCalendarExtras ?? 1) === 1 };
+}
+
+export async function saveAdminCalendarDisplaySetting(password: string, showCalendarExtras: boolean) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.insert(appSettings).values({ id: 1, showCalendarExtras: showCalendarExtras ? 1 : 0 }).onDuplicateKeyUpdate({ set: { showCalendarExtras: showCalendarExtras ? 1 : 0 } });
+  return { showCalendarExtras };
+}
+
+export async function listAdminAccounts(password: string) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const [accountRows, sessions, progress, creatures, eggs] = await Promise.all([
+    db.select().from(learners).orderBy(desc(learners.lastSignedIn)),
+    db.select().from(studySessions),
+    db.select().from(studyProgress),
+    db.select().from(learnerCreatures),
+    db.select().from(learnerEggs),
+  ]);
+  return accountRows.map(account => {
+    const accountSessions = sessions.filter(item => item.learnerId === account.id);
+    const accountProgress = progress.filter(item => item.learnerId === account.id);
+    const currentCreature = creatures.find(item => item.id === account.activeCreatureId);
+    return { id: account.id, createdAt: account.createdAt, lastSignedIn: account.lastSignedIn, revivalTickets: account.revivalTickets, totalStudySeconds: accountSessions.reduce((sum, item) => sum + item.seconds, 0), learned: accountProgress.filter(item => item.correctCount > 0).length, retention: accountProgress.length ? Math.round(accountProgress.reduce((sum, item) => sum + item.strength, 0) / accountProgress.length) : 0, monsterStage: currentCreature?.stage ?? account.monsterStage, ownedEggCount: eggs.filter(item => item.learnerId === account.id && !item.hatchedAt).length };
+  });
+}
+
+export async function getAdminAccountDetail(password: string, learnerId: number) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const account = (await db.select().from(learners).where(eq(learners.id, learnerId)).limit(1))[0];
+  if (!account) throw new Error("アカウントが見つかりません");
+  const [sessions, progress, creatures, eggs, ticketUses, definitions] = await Promise.all([
+    db.select().from(studySessions).where(eq(studySessions.learnerId, learnerId)).orderBy(desc(studySessions.createdAt)),
+    db.select().from(studyProgress).where(eq(studyProgress.learnerId, learnerId)),
+    db.select().from(learnerCreatures).where(eq(learnerCreatures.learnerId, learnerId)).orderBy(desc(learnerCreatures.createdAt)),
+    db.select().from(learnerEggs).where(eq(learnerEggs.learnerId, learnerId)),
+    db.select().from(revivalTicketUses).where(eq(revivalTicketUses.learnerId, learnerId)).orderBy(desc(revivalTicketUses.eventDate)),
+    db.select().from(eggDefinitions),
+  ]);
+  const definitionsById = new Map(definitions.map(item => [item.id, item]));
+  const currentCreature = creatures.find(item => item.id === account.activeCreatureId);
+  return { learner: { id: account.id, createdAt: account.createdAt, lastSignedIn: account.lastSignedIn, revivalTickets: account.revivalTickets, monsterStage: currentCreature?.stage ?? account.monsterStage }, totalStudySeconds: sessions.reduce((sum, item) => sum + item.seconds, 0), learned: progress.filter(item => item.correctCount > 0).length, retention: progress.length ? Math.round(progress.reduce((sum, item) => sum + item.strength, 0) / progress.length) : 0, dueReviewCount: progress.filter(item => item.nextReviewAt && item.nextReviewAt <= new Date()).length, creatures: creatures.map(item => ({ id: item.id, stage: item.stage, isActive: item.id === account.activeCreatureId, name: definitionsById.get(item.eggDefinitionId)?.name ?? "生物", completedAt: item.completedAt })), eggs: eggs.map(item => ({ id: item.id, name: definitionsById.get(item.eggDefinitionId)?.name ?? "卵", hatchedAt: item.hatchedAt })), ticketUses: ticketUses.map(item => item.eventDate), sessionCount: sessions.length };
+}
+
+export async function resetAdminRevivalTickets(password: string, learnerId: number) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const exists = (await db.select({ id: learners.id }).from(learners).where(eq(learners.id, learnerId)).limit(1))[0];
+  if (!exists) throw new Error("アカウントが見つかりません");
+  await db.update(learners).set({ revivalTickets: 2 }).where(eq(learners.id, learnerId));
+  return { learnerId, revivalTickets: 2 };
 }
 
 export async function saveMonsterStage(password: string, stage: number, imageDataUrl: string) {

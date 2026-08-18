@@ -22,6 +22,12 @@ export const learners = mysqlTable("learners", {
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
+export const appSettings = mysqlTable("appSettings", {
+  id: int("id").primaryKey(),
+  showCalendarExtras: int("showCalendarExtras").notNull().default(1),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
 export const revivalTicketUses = mysqlTable("revivalTicketUses", {
   id: int("id").autoincrement().primaryKey(),
   learnerId: int("learnerId").notNull(),
@@ -252,6 +258,7 @@ export const dailyStudyJournalClaims = mysqlTable("dailyStudyJournalClaims", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Learner = typeof learners.$inferSelect;
+export type AppSettings = typeof appSettings.$inferSelect;
 export type RevivalTicketUse = typeof revivalTicketUses.$inferSelect;
 export type WordBook = typeof wordBooks.$inferSelect;
 export type WordEntry = typeof wordEntries.$inferSelect;
