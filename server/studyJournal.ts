@@ -222,16 +222,16 @@ function parseJournalJson(content: string) {
 async function generateStudyJournalQuestions(category: StudyJournalCategory, level: StudyJournalLevel, passage: string) {
   const response = await Promise.race([
     invokeLLM({
-      model: "gpt-5-mini",
+      model: "gemini-3-flash-preview",
       messages: [
         { role: "system", content: "You are a precise reading-test editor. Follow the requested question distribution exactly and never ask outside-knowledge questions." },
         { role: "user", content: buildStudyJournalQuizPrompt(category, level, passage) },
       ],
-      maxCompletionTokens: 3200,
-      reasoning: { effort: "medium" },
+      maxTokens: 2800,
+      reasoningEffort: "low",
       outputSchema: journalQuestionSchema,
     }),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("記事問題の生成に時間がかかっています。通信状況を確認して、もう一度お試しください")), 35_000)),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("記事問題の生成に時間がかかっています。通信状況を確認して、もう一度お試しください")), 40_000)),
   ]);
   const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
   if (typeof content !== "string") throw new Error("記事問題の生成内容を受け取れませんでした");
@@ -239,7 +239,7 @@ async function generateStudyJournalQuestions(category: StudyJournalCategory, lev
   return normalizeStudyJournalQuestions(raw.questions, passage, category);
 }
 
-async function generateCompleteStudyJournal(category: StudyJournalCategory, level: StudyJournalLevel, sources: NewsSource[], timeoutMessage: string) {
+export async function generateCompleteStudyJournal(category: StudyJournalCategory, level: StudyJournalLevel, sources: NewsSource[], timeoutMessage: string) {
   const response = await Promise.race([
     invokeLLM({
       model: "gemini-3-flash-preview",
