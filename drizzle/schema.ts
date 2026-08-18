@@ -17,6 +17,7 @@ export const learners = mysqlTable("learners", {
   pinHash: varchar("pinHash", { length: 64 }).notNull().unique(),
   revivalTickets: int("revivalTickets").notNull().default(2),
   monsterStage: int("monsterStage").notNull().default(1),
+  activeCreatureId: int("activeCreatureId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
@@ -129,6 +130,74 @@ export const monsterStages = mysqlTable("monsterStages", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
+export const eggDefinitions = mysqlTable("eggDefinitions", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  description: varchar("description", { length: 500 }).notNull().default(""),
+  isActive: int("isActive").notNull().default(1),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const creatureStageImages = mysqlTable("creatureStageImages", {
+  id: int("id").autoincrement().primaryKey(),
+  eggDefinitionId: int("eggDefinitionId").notNull(),
+  stage: int("stage").notNull(),
+  imageKey: varchar("imageKey", { length: 512 }).notNull(),
+  imageUrl: varchar("imageUrl", { length: 1024 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("creatureStageImages_egg_stage_unique").on(table.eggDefinitionId, table.stage),
+  index("creatureStageImages_egg_idx").on(table.eggDefinitionId),
+]);
+
+export const normalMissions = mysqlTable("normalMissions", {
+  id: int("id").autoincrement().primaryKey(),
+  title: varchar("title", { length: 160 }).notNull(),
+  targetStudySeconds: int("targetStudySeconds").notNull(),
+  rewardEggDefinitionId: int("rewardEggDefinitionId").notNull(),
+  sortOrder: int("sortOrder").notNull().default(0),
+  isActive: int("isActive").notNull().default(1),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  index("normalMissions_active_order_idx").on(table.isActive, table.sortOrder),
+]);
+
+export const learnerCreatures = mysqlTable("learnerCreatures", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  eggDefinitionId: int("eggDefinitionId").notNull(),
+  stage: int("stage").notNull().default(1),
+  startGrowthSeconds: int("startGrowthSeconds").notNull().default(0),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  completedAt: timestamp("completedAt"),
+}, table => [
+  index("learnerCreatures_learner_created_idx").on(table.learnerId, table.createdAt),
+]);
+
+export const learnerEggs = mysqlTable("learnerEggs", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  eggDefinitionId: int("eggDefinitionId").notNull(),
+  normalMissionId: int("normalMissionId").notNull(),
+  hatchedCreatureId: int("hatchedCreatureId"),
+  acquiredAt: timestamp("acquiredAt").defaultNow().notNull(),
+  hatchedAt: timestamp("hatchedAt"),
+}, table => [
+  uniqueIndex("learnerEggs_learner_normalMission_unique").on(table.learnerId, table.normalMissionId),
+  index("learnerEggs_learner_hatched_idx").on(table.learnerId, table.hatchedAt),
+]);
+
+export const normalMissionClaims = mysqlTable("normalMissionClaims", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  normalMissionId: int("normalMissionId").notNull(),
+  claimedAt: timestamp("claimedAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("normalMissionClaims_learner_mission_unique").on(table.learnerId, table.normalMissionId),
+]);
+
 export const dailySelectAttempts = mysqlTable("dailySelectAttempts", {
   id: int("id").autoincrement().primaryKey(),
   learnerId: int("learnerId").notNull(),
@@ -148,6 +217,11 @@ export type Learner = typeof learners.$inferSelect;
 export type WordBook = typeof wordBooks.$inferSelect;
 export type WordEntry = typeof wordEntries.$inferSelect;
 export type MonsterStage = typeof monsterStages.$inferSelect;
+export type EggDefinition = typeof eggDefinitions.$inferSelect;
+export type CreatureStageImage = typeof creatureStageImages.$inferSelect;
+export type NormalMission = typeof normalMissions.$inferSelect;
+export type LearnerCreature = typeof learnerCreatures.$inferSelect;
+export type LearnerEgg = typeof learnerEggs.$inferSelect;
 export const missionEvents = mysqlTable("missionEvents", {
   id: int("id").autoincrement().primaryKey(),
   learnerId: int("learnerId").notNull(),

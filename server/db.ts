@@ -5,13 +5,19 @@ import {
   announcements,
   calendarEvents,
   cardSets,
+  creatureStageImages,
   dailySelectAttempts,
+  eggDefinitions,
+  learnerCreatures,
+  learnerEggs,
   learnerEvents,
   learnerPointBalances,
   missionClaims,
   missionEvents,
   learners,
   monsterStages,
+  normalMissionClaims,
+  normalMissions,
   recommendedTests,
   studyProgress,
   studySessions,
@@ -47,6 +53,7 @@ export const DAILY_REWARD_POINTS = 1;
 export const DAILY_ALL_CLEAR_REWARD = 5;
 export const MONTHLY_ALL_CLEAR_REWARD = 30;
 const JST_MONTH_FORMAT = /^\d{4}-\d{2}$/;
+const STARTER_EGG_NAME = "はじまりの生物";
 
 export function monsterEvolutionFromSeconds(totalSeconds: number) {
   const secondsPerStage = MONSTER_HOURS_PER_STAGE * 3600;
@@ -334,6 +341,49 @@ export function applyMissionMinutesToSeconds(baseSeconds: number, appliedMinutes
   return Math.max(0, baseSeconds) + Math.max(0, appliedMinutes) * 60;
 }
 
+export function creatureGrowthSeconds(lifetimeTotalSeconds: number, startGrowthSeconds: number) {
+  return Math.max(0, lifetimeTotalSeconds - Math.max(0, startGrowthSeconds));
+}
+
+export function canClaimNormalMission(totalStudySeconds: number, targetStudySeconds: number, claimed: boolean) {
+  return !claimed && totalStudySeconds >= targetStudySeconds;
+}
+
+async function totalGrowthSecondsForLearner(learnerId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const [sessions, points] = await Promise.all([
+    db.select({ seconds: studySessions.seconds }).from(studySessions).where(eq(studySessions.learnerId, learnerId)),
+    db.select({ totalAppliedMinutes: learnerPointBalances.totalAppliedMinutes }).from(learnerPointBalances).where(eq(learnerPointBalances.learnerId, learnerId)).limit(1),
+  ]);
+  return applyMissionMinutesToSeconds(sessions.reduce((sum, item) => sum + item.seconds, 0), points[0]?.totalAppliedMinutes ?? 0);
+}
+
+async function ensureActiveCreature(learnerId: number, legacyStage = 1) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = (await db.select({ activeCreatureId: learners.activeCreatureId }).from(learners).where(eq(learners.id, learnerId)).limit(1))[0];
+  if (learner?.activeCreatureId) {
+    const active = (await db.select().from(learnerCreatures).where(eq(learnerCreatures.id, learner.activeCreatureId)).limit(1))[0];
+    if (active) return active;
+  }
+  const starter = (await db.select().from(eggDefinitions).where(eq(eggDefinitions.name, STARTER_EGG_NAME)).orderBy(eggDefinitions.id).limit(1))[0];
+  if (!starter) throw new Error("最初の生物が設定されていません。管理者へお問い合わせください");
+  const created = await db.insert(learnerCreatures).values({
+    learnerId,
+    eggDefinitionId: starter.id,
+    stage: Math.max(1, Math.min(MONSTER_STAGE_COUNT, legacyStage)),
+    startGrowthSeconds: 0,
+    completedAt: legacyStage >= MONSTER_STAGE_COUNT ? new Date() : null,
+  }).$returningId();
+  const creatureId = created[0]?.id;
+  if (!creatureId) throw new Error("最初の生物を作成できませんでした");
+  await db.update(learners).set({ activeCreatureId: creatureId }).where(eq(learners.id, learnerId));
+  const creature = (await db.select().from(learnerCreatures).where(eq(learnerCreatures.id, creatureId)).limit(1))[0];
+  if (!creature) throw new Error("最初の生物を取得できませんでした");
+  return creature;
+}
+
 function isDuplicateMissionClaim(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "ER_DUP_ENTRY";
 }
@@ -482,6 +532,7 @@ export async function loginLearner(pin: string) {
   const existing = await db.select().from(learners).where(eq(learners.pinHash, hashed)).limit(1);
   if (existing[0]) {
     await db.update(learners).set({ lastSignedIn: new Date() }).where(eq(learners.id, existing[0].id));
+    await ensureActiveCreature(existing[0].id, existing[0].monsterStage);
     await recordMissionEventForLearner(existing[0].id, "login", "english", `login-${appDateString()}`);
     return existing[0];
   }
@@ -489,7 +540,10 @@ export async function loginLearner(pin: string) {
   const learnerId = created[0]?.id;
   if (!learnerId) throw new Error("Failed to create learner");
   const learner = await db.select().from(learners).where(eq(learners.id, learnerId)).limit(1);
-  if (learner[0]) await recordMissionEventForLearner(learner[0].id, "login", "english", `login-${appDateString()}`);
+  if (learner[0]) {
+    await ensureActiveCreature(learner[0].id, learner[0].monsterStage);
+    await recordMissionEventForLearner(learner[0].id, "login", "english", `login-${appDateString()}`);
+  }
   return learner[0];
 }
 
@@ -695,14 +749,99 @@ export async function getDayDetail(pin: string, category: StudyCategory, date: s
   return { date, totalSeconds: sessions.reduce((sum, item) => sum + item.seconds, 0), learned, retention, reviewDue: dueProgress.length, personalEvents, calendarEvents: visibleCalendarEvents };
 }
 
+export async function getNormalMissionStatus(pin: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const [totalStudySeconds, missions, claims, eggs] = await Promise.all([
+    totalGrowthSecondsForLearner(learner.id),
+    db.select().from(normalMissions).where(eq(normalMissions.isActive, 1)).orderBy(normalMissions.sortOrder, normalMissions.id),
+    db.select().from(normalMissionClaims).where(eq(normalMissionClaims.learnerId, learner.id)),
+    db.select().from(learnerEggs).where(eq(learnerEggs.learnerId, learner.id)),
+  ]);
+  const eggIds = Array.from(new Set(missions.map(mission => mission.rewardEggDefinitionId)));
+  const definitions = eggIds.length ? await db.select().from(eggDefinitions).where(inArray(eggDefinitions.id, eggIds)) : [];
+  const definitionsById = new Map(definitions.map(definition => [definition.id, definition]));
+  const claimedIds = new Set(claims.map(claim => claim.normalMissionId));
+  const eggsByMissionId = new Map(eggs.map(egg => [egg.normalMissionId, egg]));
+  return {
+    totalStudySeconds,
+    ownedEggs: eggs.map(egg => {
+      const definition = definitionsById.get(egg.eggDefinitionId);
+      return { id: egg.id, eggDefinitionId: egg.eggDefinitionId, name: definition?.name ?? "卵", description: definition?.description ?? "", hatchedAt: egg.hatchedAt, hatchedCreatureId: egg.hatchedCreatureId };
+    }),
+    missions: missions.map(mission => {
+      const claimed = claimedIds.has(mission.id);
+      const egg = definitionsById.get(mission.rewardEggDefinitionId);
+      return {
+        id: mission.id,
+        title: mission.title,
+        targetStudySeconds: mission.targetStudySeconds,
+        currentStudySeconds: totalStudySeconds,
+        rewardEgg: egg ? { id: egg.id, name: egg.name, description: egg.description } : null,
+        claimed,
+        claimable: canClaimNormalMission(totalStudySeconds, mission.targetStudySeconds, claimed),
+        eggId: eggsByMissionId.get(mission.id)?.id ?? null,
+      };
+    }),
+  };
+}
+
+export async function claimNormalMission(pin: string, normalMissionId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const [mission, totalStudySeconds] = await Promise.all([
+    db.select().from(normalMissions).where(and(eq(normalMissions.id, normalMissionId), eq(normalMissions.isActive, 1))).limit(1),
+    totalGrowthSecondsForLearner(learner.id),
+  ]);
+  const target = mission[0];
+  if (!target) throw new Error("ノーマルミッションが見つかりません");
+  if (totalStudySeconds < target.targetStudySeconds) throw new Error("必要な累計学習時間にまだ到達していません");
+  try {
+    await db.transaction(async tx => {
+      await tx.insert(normalMissionClaims).values({ learnerId: learner.id, normalMissionId: target.id });
+      await tx.insert(learnerEggs).values({ learnerId: learner.id, eggDefinitionId: target.rewardEggDefinitionId, normalMissionId: target.id });
+    });
+  } catch (error) {
+    if (isDuplicateMissionClaim(error)) throw new Error("この卵は受取済みです。画面を更新しました。");
+    throw error;
+  }
+  const egg = (await db.select().from(eggDefinitions).where(eq(eggDefinitions.id, target.rewardEggDefinitionId)).limit(1))[0];
+  return { missionId: target.id, eggName: egg?.name ?? "卵" };
+}
+
+export async function hatchEgg(pin: string, eggId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  const activeCreature = await ensureActiveCreature(learner.id, learner.monsterStage);
+  if (activeCreature.stage < MONSTER_STAGE_COUNT) throw new Error("現在の生物が最終進化に到達してから、新しい生物を育てられます");
+  const egg = (await db.select().from(learnerEggs).where(and(eq(learnerEggs.id, eggId), eq(learnerEggs.learnerId, learner.id))).limit(1))[0];
+  if (!egg || egg.hatchedAt || egg.hatchedCreatureId) throw new Error("この卵は使用できません");
+  const startGrowthSeconds = await totalGrowthSecondsForLearner(learner.id);
+  const created = await db.transaction(async tx => {
+    await tx.update(learnerCreatures).set({ completedAt: activeCreature.completedAt ?? new Date() }).where(eq(learnerCreatures.id, activeCreature.id));
+    const inserted = await tx.insert(learnerCreatures).values({ learnerId: learner.id, eggDefinitionId: egg.eggDefinitionId, stage: 1, startGrowthSeconds }).$returningId();
+    const creatureId = inserted[0]?.id;
+    if (!creatureId) throw new Error("新しい生物を育成できませんでした");
+    await tx.update(learnerEggs).set({ hatchedCreatureId: creatureId, hatchedAt: new Date() }).where(eq(learnerEggs.id, egg.id));
+    await tx.update(learners).set({ activeCreatureId: creatureId, monsterStage: 1 }).where(eq(learners.id, learner.id));
+    return creatureId;
+  });
+  const definition = (await db.select().from(eggDefinitions).where(eq(eggDefinitions.id, egg.eggDefinitionId)).limit(1))[0];
+  return { creatureId: created, name: definition?.name ?? "新しい生物", startGrowthSeconds };
+}
+
 export async function getDashboard(pin: string, category: StudyCategory) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
+  const activeCreature = await ensureActiveCreature(learner.id, learner.monsterStage);
   const books = await listAccessibleWordBooks(pin, category);
   const bookIds = books.map(book => book.id);
   const activeSince = new Date(Date.now() - 15 * 60_000);
-  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages, pointBalances] = await Promise.all([
+  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages, creatureRows, definitions, pointBalances] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)) : Promise.resolve([]),
     db.select().from(studyProgress).where(eq(studyProgress.learnerId, learner.id)),
     db.select().from(studySessions).where(eq(studySessions.learnerId, learner.id)).orderBy(desc(studySessions.createdAt)),
@@ -712,7 +851,9 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(learnerEvents).where(eq(learnerEvents.learnerId, learner.id)).orderBy(learnerEvents.eventDate),
     db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, appDateString()), gte(recommendedTests.endDate, appDateString()))).orderBy(desc(recommendedTests.createdAt)).limit(20),
     db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
-    db.select().from(monsterStages).orderBy(monsterStages.stage),
+    db.select().from(creatureStageImages),
+    db.select().from(learnerCreatures).where(eq(learnerCreatures.learnerId, learner.id)).orderBy(desc(learnerCreatures.createdAt)),
+    db.select().from(eggDefinitions),
     db.select().from(learnerPointBalances).where(eq(learnerPointBalances.learnerId, learner.id)).limit(1),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
@@ -721,9 +862,13 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   const baseStudySeconds = sessions.reduce((sum, item) => sum + item.seconds, 0);
   const appliedMissionMinutes = pointBalances[0]?.totalAppliedMinutes ?? 0;
   const totalSeconds = applyMissionMinutesToSeconds(baseStudySeconds, appliedMissionMinutes);
+  const activeGrowthSeconds = creatureGrowthSeconds(totalSeconds, activeCreature.startGrowthSeconds);
   const retention = relevantProgress.length ? Math.round(relevantProgress.reduce((sum, item) => sum + item.strength, 0) / relevantProgress.length) : 0;
   const learned = relevantProgress.filter(item => item.correctCount > 0).length;
-  const monster = monsterManualProgressFromSeconds(totalSeconds, learner.monsterStage);
+  const monster = monsterManualProgressFromSeconds(activeGrowthSeconds, activeCreature.stage);
+  const definitionsById = new Map(definitions.map(definition => [definition.id, definition]));
+  const imageFor = (eggDefinitionId: number, stage: number) => stageImages.find(image => image.eggDefinitionId === eggDefinitionId && image.stage === stage)?.imageUrl ?? null;
+  const monsterHistory = creatureRows.map(creature => ({ id: creature.id, eggDefinitionId: creature.eggDefinitionId, name: definitionsById.get(creature.eggDefinitionId)?.name ?? "生物", stage: creature.stage, totalStages: MONSTER_STAGE_COUNT, isActive: creature.id === activeCreature.id, imageUrl: imageFor(creature.eggDefinitionId, creature.stage), completedAt: creature.completedAt }));
   return {
     learner: { id: learner.id, revivalTickets: learner.revivalTickets },
     books,
@@ -734,7 +879,8 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     events,
     personalEvents,
     recommendations,
-    monster: { ...monster, totalSeconds, baseStudySeconds, appliedMissionMinutes, imageUrl: stageImages.find(item => item.stage === monster.stage)?.imageUrl ?? null, configuredStages: stageImages.length },
+    monster: { ...monster, id: activeCreature.id, eggDefinitionId: activeCreature.eggDefinitionId, name: definitionsById.get(activeCreature.eggDefinitionId)?.name ?? "生物", totalSeconds: activeGrowthSeconds, lifetimeTotalSeconds: totalSeconds, baseStudySeconds, appliedMissionMinutes, imageUrl: imageFor(activeCreature.eggDefinitionId, monster.stage), configuredStages: stageImages.filter(image => image.eggDefinitionId === activeCreature.eggDefinitionId).length, canStartNewCreature: activeCreature.stage >= MONSTER_STAGE_COUNT },
+    monsterHistory,
     mistakeEntryIds: relevantProgress.filter(item => item.incorrectCount > 0).sort((left, right) => right.incorrectCount - left.incorrectCount).map(item => item.entryId),
     reviewDates: relevantProgress.filter(item => item.nextReviewAt).map(item => item.nextReviewAt),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
@@ -745,16 +891,16 @@ export async function evolveMonster(pin: string) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  const [sessions, pointBalances] = await Promise.all([
-    db.select({ seconds: studySessions.seconds }).from(studySessions).where(eq(studySessions.learnerId, learner.id)),
-    db.select({ totalAppliedMinutes: learnerPointBalances.totalAppliedMinutes }).from(learnerPointBalances).where(eq(learnerPointBalances.learnerId, learner.id)).limit(1),
-  ]);
-  const baseStudySeconds = sessions.reduce((sum, item) => sum + item.seconds, 0);
-  const totalSeconds = applyMissionMinutesToSeconds(baseStudySeconds, pointBalances[0]?.totalAppliedMinutes ?? 0);
-  const monster = monsterManualProgressFromSeconds(totalSeconds, learner.monsterStage);
+  const activeCreature = await ensureActiveCreature(learner.id, learner.monsterStage);
+  const lifetimeTotalSeconds = await totalGrowthSecondsForLearner(learner.id);
+  const totalSeconds = creatureGrowthSeconds(lifetimeTotalSeconds, activeCreature.startGrowthSeconds);
+  const monster = monsterManualProgressFromSeconds(totalSeconds, activeCreature.stage);
   if (!monster.canEvolve) throw new Error("進化できる学習時間にまだ到達していません");
   const nextStage = monster.stage + 1;
-  await db.update(learners).set({ monsterStage: nextStage }).where(eq(learners.id, learner.id));
+  await db.transaction(async tx => {
+    await tx.update(learnerCreatures).set({ stage: nextStage, completedAt: nextStage >= MONSTER_STAGE_COUNT ? new Date() : null }).where(eq(learnerCreatures.id, activeCreature.id));
+    await tx.update(learners).set({ monsterStage: nextStage }).where(eq(learners.id, learner.id));
+  });
   return { stage: nextStage, unlockedStage: monster.unlockedStage, totalSeconds };
 }
 
@@ -820,14 +966,17 @@ export async function getAdminOverview(password: string) {
   await ensureStandardBooks();
   const books = await db.select().from(wordBooks).where(eq(wordBooks.kind, "standard")).orderBy(wordBooks.category);
   const bookIds = books.map(book => book.id);
-  const [entries, announcementList, tests, events, stageImages] = await Promise.all([
+  const [entries, announcementList, tests, events, stageImages, eggs, normalMissionList, creatureImages] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)).orderBy(wordEntries.entryNo) : Promise.resolve([]),
     db.select().from(announcements).orderBy(desc(announcements.createdAt)),
     db.select().from(recommendedTests).orderBy(desc(recommendedTests.createdAt)),
     db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
     db.select().from(monsterStages).orderBy(monsterStages.stage),
+    db.select().from(eggDefinitions).orderBy(eggDefinitions.id),
+    db.select().from(normalMissions).orderBy(normalMissions.sortOrder, normalMissions.id),
+    db.select().from(creatureStageImages).orderBy(creatureStageImages.eggDefinitionId, creatureStageImages.stage),
   ]);
-  return { books, entries, announcements: announcementList, tests, events, monsterStages: stageImages };
+  return { books, entries, announcements: announcementList, tests, events, monsterStages: stageImages, eggDefinitions: eggs, normalMissions: normalMissionList, creatureStageImages: creatureImages };
 }
 
 export async function saveMonsterStage(password: string, stage: number, imageDataUrl: string) {
@@ -844,6 +993,54 @@ export async function saveMonsterStage(password: string, stage: number, imageDat
   if (!db) throw new Error("Database unavailable");
   await db.insert(monsterStages).values({ stage, imageKey: stored.key, imageUrl: stored.url }).onDuplicateKeyUpdate({ set: { imageKey: stored.key, imageUrl: stored.url } });
   return { stage, imageUrl: stored.url };
+}
+
+export async function saveEggDefinition(password: string, input: { id?: number; name: string; description: string; isActive: boolean }) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  if (input.id) {
+    await db.update(eggDefinitions).set({ name: input.name, description: input.description, isActive: input.isActive ? 1 : 0 }).where(eq(eggDefinitions.id, input.id));
+    return { id: input.id };
+  }
+  const created = await db.insert(eggDefinitions).values({ name: input.name, description: input.description, isActive: input.isActive ? 1 : 0 }).$returningId();
+  const id = created[0]?.id;
+  if (!id) throw new Error("卵を登録できませんでした");
+  return { id };
+}
+
+export async function saveNormalMission(password: string, input: { id?: number; title: string; targetStudySeconds: number; rewardEggDefinitionId: number; sortOrder: number; isActive: boolean }) {
+  await requireAdminPassword(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const egg = (await db.select({ id: eggDefinitions.id }).from(eggDefinitions).where(eq(eggDefinitions.id, input.rewardEggDefinitionId)).limit(1))[0];
+  if (!egg) throw new Error("報酬にする卵を選択してください");
+  if (input.id) {
+    await db.update(normalMissions).set({ title: input.title, targetStudySeconds: input.targetStudySeconds, rewardEggDefinitionId: input.rewardEggDefinitionId, sortOrder: input.sortOrder, isActive: input.isActive ? 1 : 0 }).where(eq(normalMissions.id, input.id));
+    return { id: input.id };
+  }
+  const created = await db.insert(normalMissions).values({ title: input.title, targetStudySeconds: input.targetStudySeconds, rewardEggDefinitionId: input.rewardEggDefinitionId, sortOrder: input.sortOrder, isActive: input.isActive ? 1 : 0 }).$returningId();
+  const id = created[0]?.id;
+  if (!id) throw new Error("ノーマルミッションを登録できませんでした");
+  return { id };
+}
+
+export async function saveCreatureStageImage(password: string, eggDefinitionId: number, stage: number, imageDataUrl: string) {
+  await requireAdminPassword(password);
+  if (!Number.isInteger(stage) || stage < 1 || stage > MONSTER_STAGE_COUNT) throw new Error("生物の段階は1〜13で指定してください");
+  const match = /^data:(image\/(?:png|jpeg|webp));base64,([\s\S]+)$/.exec(imageDataUrl);
+  if (!match) throw new Error("PNG、JPEG、WebP形式の画像を選択してください");
+  const mimeType = match[1];
+  const bytes = Buffer.from(match[2], "base64");
+  if (!bytes.length || bytes.length > 5 * 1024 * 1024) throw new Error("画像は5MB以下で指定してください");
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const egg = (await db.select({ id: eggDefinitions.id }).from(eggDefinitions).where(eq(eggDefinitions.id, eggDefinitionId)).limit(1))[0];
+  if (!egg) throw new Error("卵が見つかりません");
+  const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+  const stored = await storagePut(`creature-stages/egg-${eggDefinitionId}/stage-${stage}.${extension}`, bytes, mimeType);
+  await db.insert(creatureStageImages).values({ eggDefinitionId, stage, imageKey: stored.key, imageUrl: stored.url }).onDuplicateKeyUpdate({ set: { imageKey: stored.key, imageUrl: stored.url } });
+  return { eggDefinitionId, stage, imageUrl: stored.url };
 }
 
 export async function replaceStandardEntries(password: string, bookId: number, entries: EntryDraft[]) {
