@@ -44,24 +44,23 @@ export function CreatureLifecyclePanelV2({ pin, monster, history, embedded = fal
   const availableEggs = unhatchedEggs((eggsQuery.data?.ownedEggs ?? []) as OwnedEgg[]);
 
   return <>
-    <Card className={embedded ? "border-white/30 bg-emerald-950/55 text-white shadow-md backdrop-blur-sm" : "border-emerald-300/50 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/20"}>
-      <CardContent className="p-3">
+    <Card className={embedded ? "border-0 bg-transparent text-white shadow-none" : "border-emerald-300/50 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/20"}>
+      <CardContent className={embedded ? "p-0" : "p-3"}>
         <div className="flex items-center justify-between gap-2">
           <div className={embedded ? "hidden" : ""}>
             <p className="text-sm font-semibold">育成管理</p>
             <p className="text-[11px] text-muted-foreground">今まで育てた生物と、次に育てる卵を確認できます。</p>
           </div>
-          <Button size="sm" variant="outline" className={embedded ? "border-white/50 bg-white/10 text-white hover:bg-white/20 hover:text-white" : ""} onClick={() => setShowHistory(value => !value)}>今まで育てたモンスター</Button>
+          <Button size="sm" variant="outline" className={embedded ? "h-auto border-0 bg-transparent p-0 text-xs font-medium text-emerald-50 underline decoration-emerald-200/70 underline-offset-4 hover:bg-transparent hover:text-white" : ""} onClick={() => setShowHistory(value => !value)}>今まで育てたモンスター</Button>
         </div>
 
-        {monster?.canStartNewCreature && <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:bg-amber-950/30">
-          <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">新しい生物を育てられます</p>
-          <p className="mt-1 text-xs text-amber-800/80 dark:text-amber-100/80">所持している卵を選ぶと、現在の生物を履歴に残して新しい生物の育成時間を0時間から始めます。</p>
-          <Button className="mt-3 w-full bg-amber-400 text-emerald-950 hover:bg-amber-300" disabled={!availableEggs.length} onClick={() => setShowEggPicker(value => !value)}>
+        {monster?.canStartNewCreature && <div className={cn("mt-2", embedded && "text-right")}>
+          <p className={cn("text-xs font-semibold text-amber-800 dark:text-amber-200", embedded && "text-amber-100")}>新しい生物を育てられます</p>
+          <Button size="sm" className={cn("mt-1 bg-amber-400 text-emerald-950 hover:bg-amber-300", embedded && "h-auto bg-transparent p-0 text-xs text-amber-100 underline decoration-amber-200 underline-offset-4 hover:bg-transparent hover:text-amber-50")} disabled={!availableEggs.length} onClick={() => setShowEggPicker(value => !value)}>
             <Egg className="mr-2 h-4 w-4" />{availableEggs.length ? `所持している卵を選ぶ（${availableEggs.length}個）` : "使える卵がありません"}
           </Button>
-          {showEggPicker && <div className="mt-3 space-y-2" aria-label="所持している卵">
-            {availableEggs.map(egg => <button key={egg.id} type="button" onClick={() => { setSelectedEgg(egg); setShowEggPicker(false); }} className="flex w-full items-center gap-3 rounded-xl border border-amber-300/80 bg-background p-3 text-left transition hover:border-amber-500 hover:bg-amber-100/60 dark:hover:bg-amber-950/40">
+          {showEggPicker && <div className={cn("mt-2 space-y-1", embedded && "rounded-lg bg-emerald-950/85 p-2 text-left")} aria-label="所持している卵">
+            {availableEggs.map(egg => <button key={egg.id} type="button" onClick={() => { setSelectedEgg(egg); setShowEggPicker(false); }} className="flex w-full items-center gap-3 rounded-lg border-b border-amber-300/45 p-2 text-left transition hover:bg-amber-100/60 dark:hover:bg-amber-950/40">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-200"><Egg className="h-5 w-5" /></div>
               <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{egg.name}</p><p className="mt-0.5 text-xs text-muted-foreground">{egg.description || "タップしてこの卵を選択"}</p></div>
               <span className="text-xs font-medium text-amber-700 dark:text-amber-300">選ぶ</span>
