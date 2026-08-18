@@ -30,6 +30,11 @@ describe("mission rules", () => {
     expect(consecutiveDays([])).toBe(0);
   });
 
+  it("counts consecutive login streaks across month boundaries in normal and leap years", () => {
+    expect(consecutiveDays(["2026-02-27", "2026-02-28", "2026-03-01"])).toBe(3);
+    expect(consecutiveDays(["2028-02-28", "2028-02-29", "2028-03-01"])).toBe(3);
+  });
+
   it("uses Japan time for date and month boundaries", () => {
     expect(appDateString(new Date("2026-08-16T14:59:59.999Z"))).toBe("2026-08-16");
     expect(appDateString(new Date("2026-08-16T15:00:00.000Z"))).toBe("2026-08-17");
