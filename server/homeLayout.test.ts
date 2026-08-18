@@ -18,4 +18,9 @@ describe("ホーム画面の省スペース配置", () => {
     expect(source).toContain('<Pomodoro pin={pin} />');
     expect(source).toContain('<PersonalSchedule pin={pin} events={data.personalEvents ?? []} />');
   });
+
+  it("ダークモードでは直近7日間の学習グラフを白系の波線で描画する", () => {
+    expect(source).toContain('stroke={theme === "dark" ? "#f8fafc" : "hsl(var(--primary))"}');
+    expect(source).toContain('stopColor={theme === "dark" ? "#f8fafc" : "hsl(var(--primary))"}');
+  });
 });
