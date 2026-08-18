@@ -22,6 +22,16 @@ export const learners = mysqlTable("learners", {
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
+export const revivalTicketUses = mysqlTable("revivalTicketUses", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  eventDate: varchar("eventDate", { length: 10 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  uniqueIndex("revivalTicketUses_learner_date_unique").on(table.learnerId, table.eventDate),
+  index("revivalTicketUses_learner_date_idx").on(table.learnerId, table.eventDate),
+]);
+
 export const wordBooks = mysqlTable("wordBooks", {
   id: int("id").autoincrement().primaryKey(),
   ownerId: int("ownerId"),
@@ -242,6 +252,7 @@ export const dailyStudyJournalClaims = mysqlTable("dailyStudyJournalClaims", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Learner = typeof learners.$inferSelect;
+export type RevivalTicketUse = typeof revivalTicketUses.$inferSelect;
 export type WordBook = typeof wordBooks.$inferSelect;
 export type WordEntry = typeof wordEntries.$inferSelect;
 export type MonsterStage = typeof monsterStages.$inferSelect;

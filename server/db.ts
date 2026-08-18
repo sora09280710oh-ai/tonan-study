@@ -20,6 +20,7 @@ import {
   normalMissionClaims,
   normalMissions,
   recommendedTests,
+  revivalTicketUses,
   studyJournalEntries,
   studyProgress,
   studySessions,
@@ -809,14 +810,25 @@ export async function recordTimerSession(pin: string, seconds: number) {
   await db.insert(studySessions).values({ learnerId: learner.id, seconds: Math.max(1, seconds) });
 }
 
-export async function useRevivalTicket(pin: string) {
+export async function useRevivalTicket(pin: string, eventDate = appDateString()) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  if (learner.revivalTickets < 1) throw new Error("復活チケットを使い切りました");
-  const revivalTickets = learner.revivalTickets - 1;
-  await db.update(learners).set({ revivalTickets }).where(eq(learners.id, learner.id));
-  return revivalTickets;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDate) || eventDate > appDateString()) throw new Error("復活チケットは今日以前の日にだけ使用できます");
+  try {
+    const revivalTickets = await db.transaction(async tx => {
+      const current = (await tx.select({ revivalTickets: learners.revivalTickets }).from(learners).where(eq(learners.id, learner.id)).limit(1))[0]?.revivalTickets ?? 0;
+      if (current < 1) throw new Error("復活チケットを使い切りました");
+      await tx.insert(revivalTicketUses).values({ learnerId: learner.id, eventDate });
+      const remaining = current - 1;
+      await tx.update(learners).set({ revivalTickets: remaining }).where(eq(learners.id, learner.id));
+      return remaining;
+    });
+    return { revivalTickets, eventDate };
+  } catch (error) {
+    if (isDuplicateMissionClaim(error)) throw new Error("この日はすでに復活チケットを使用しています");
+    throw error;
+  }
 }
 
 export async function createLearnerEvent(pin: string, input: { eventDate: string; title: string }) {
@@ -947,7 +959,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   const books = await listAccessibleWordBooks(pin, category);
   const bookIds = books.map(book => book.id);
   const activeSince = new Date(Date.now() - 15 * 60_000);
-  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages, creatureRows, definitions, pointBalances] = await Promise.all([
+  const [entries, progress, sessions, cardSetList, announcementList, events, personalEvents, recommendations, recentSessions, stageImages, creatureRows, definitions, pointBalances, ticketUses] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)) : Promise.resolve([]),
     db.select().from(studyProgress).where(eq(studyProgress.learnerId, learner.id)),
     db.select().from(studySessions).where(eq(studySessions.learnerId, learner.id)).orderBy(desc(studySessions.createdAt)),
@@ -961,6 +973,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(learnerCreatures).where(eq(learnerCreatures.learnerId, learner.id)).orderBy(desc(learnerCreatures.createdAt)),
     db.select().from(eggDefinitions),
     db.select().from(learnerPointBalances).where(eq(learnerPointBalances.learnerId, learner.id)).limit(1),
+    db.select({ eventDate: revivalTicketUses.eventDate }).from(revivalTicketUses).where(eq(revivalTicketUses.learnerId, learner.id)).orderBy(revivalTicketUses.eventDate),
   ]);
   const entryIds = new Set(entries.map(entry => entry.id));
   const relevantProgress = progress.filter(item => entryIds.has(item.entryId));
@@ -987,6 +1000,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     recommendations,
     monster: { ...monster, id: activeCreature.id, eggDefinitionId: activeCreature.eggDefinitionId, name: definitionsById.get(activeCreature.eggDefinitionId)?.name ?? "生物", totalSeconds: activeGrowthSeconds, lifetimeTotalSeconds: totalSeconds, baseStudySeconds, appliedMissionMinutes, imageUrl: imageFor(activeCreature.eggDefinitionId, monster.stage), configuredStages: stageImages.filter(image => image.eggDefinitionId === activeCreature.eggDefinitionId).length, canStartNewCreature: activeCreature.stage >= MONSTER_STAGE_COUNT },
     monsterHistory,
+    revivalTicketDates: ticketUses.map(item => item.eventDate),
     mistakeEntryIds: relevantProgress.filter(item => item.incorrectCount > 0).sort((left, right) => right.incorrectCount - left.incorrectCount).map(item => item.entryId),
     reviewDates: relevantProgress.filter(item => item.nextReviewAt).map(item => item.nextReviewAt),
     stats: { totalSeconds, retention, streak: calculateStreak(sessions.map(item => item.createdAt)), learned, total: entries.length, due, activeLearners: new Set(recentSessions.map(item => item.learnerId)).size, isActive: recentSessions.some(item => item.learnerId === learner.id) },
