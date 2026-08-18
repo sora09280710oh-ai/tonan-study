@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildStudyJournalPrompt, normalizeStudyJournal, parseBbcWorldRss, parseMainichiRss, selectStudyJournalSources, selectTodayStudyJournalSources } from "./studyJournal";
+import { buildStudyJournalPrompt, buildStudyJournalQuizPrompt, normalizeStudyJournal, parseBbcWorldRss, parseMainichiRss, selectStudyJournalSources, selectTodayStudyJournalSources } from "./studyJournal";
 
 const englishQuestions = [
   { id: "q1", kind: "choice", focus: "comprehension", prompt: "主な話題は何ですか。", choices: ["合意", "天気", "旅行", "料理"], correctChoice: 0, sampleAnswer: "合意", explanation: "各国の指導者は合意について協議しました。", evidence: "Leaders discussed a new agreement", rubric: "本文の内容に基づいて選ぶ。" },
@@ -18,8 +18,9 @@ describe("StudyJournal教材生成", () => {
     expect(prompt).toContain("meaning and explanation MUST be natural Japanese");
     expect(prompt).toContain("190-240 word");
     expect(prompt).toContain("4-5 annotations");
-    expect(prompt).toContain("exactly 5 questions");
-    expect(prompt).toContain("35-55 word English summary");
+    const quizPrompt = buildStudyJournalQuizPrompt("english", "高校2年生", "An original English passage for testing.");
+    expect(quizPrompt).toContain("exactly 5 questions");
+    expect(quizPrompt).toContain("35-55 word English summary");
   });
 
   it("漢字の指定では漢字読解と音読み・訓読みを要求する", () => {
@@ -42,7 +43,7 @@ describe("StudyJournal教材生成", () => {
     }, "english", "高校1年生");
     expect(journal.sources).toHaveLength(1);
     expect(journal.annotations[0]?.term).toBe("agreement");
-    expect(journal.questions).toHaveLength(5);
+    expect(journal.questions).toHaveLength(0);
   });
 
   it("出典がない生成結果を拒否する", () => {

@@ -65,9 +65,19 @@ const journalSchema = {
           additionalProperties: false,
         },
       },
-      questions: studyJournalQuestionJsonSchema,
     },
-    required: ["title", "passage", "translation", "annotations", "sources", "questions"],
+    required: ["title", "passage", "translation", "annotations", "sources"],
+    additionalProperties: false,
+  },
+};
+
+const journalQuestionSchema = {
+  name: "study_journal_questions",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: { questions: studyJournalQuestionJsonSchema },
+    required: ["questions"],
     additionalProperties: false,
   },
 };
@@ -167,8 +177,11 @@ export function buildStudyJournalPrompt(category: StudyJournalCategory, level: S
     ? "Write a 190-240 word ORIGINAL English World Briefing. The reading must be fully in English. After the reader finishes, provide a concise natural Japanese translation. Choose 4-5 annotations: important vocabulary uses kind='word', and useful sentence patterns use kind='grammar'. The term may be English, but every annotation meaning and explanation MUST be natural Japanese; do not write annotation explanations in English. For non-kanji annotations, onyomi and kunyomi must be empty strings."
     : "Write a 300-420 Japanese-character ORIGINAL 世界の出来事の読解文. Use more kanji than ordinary casual Japanese while keeping the specified learner level. After the reader finishes, provide a concise simple Japanese explanation of the passage in translation. Choose 4-5 important kanji or compound words using kind='kanji'; include accurate onyomi and kunyomi when they exist. For readings that do not normally use one type, use an empty string.";
   const sourceDigest = sources.map((source, index) => `${index + 1}. title=${source.title}\npublisher=${source.publisher}\npublishedAt=${source.publishedAt}\nurl=${source.url}`).join("\n\n");
-  const questionInstruction = buildStudyJournalQuestionInstruction(category);
-  return `Today is ${now.toISOString()}. Create an educational reading using ONLY the following supplied news headline as the central topic. The source may be a recent report or an older report selected from the available archive. This is one article and one topic only: do not add other news topics. State only details supported by the headline; when details are unavailable, explain the theme in a general educational way without inventing facts. Do not copy the headline or any article sentence: write a fresh learning article. In the sources output, include this exact URL, publisher, and time. The learner level is ${level}. ${languageInstruction} ${questionInstruction} The annotations' term text must occur exactly in the passage. The five questions must be solvable only from the passage; never ask about outside knowledge. Return only data matching the requested schema.\n\nNEWS HEADLINE:\n${sourceDigest}`;
+  return `Today is ${now.toISOString()}. Create an educational reading using ONLY the following supplied news headline as the central topic. The source may be a recent report or an older report selected from the available archive. This is one article and one topic only: do not add other news topics. State only details supported by the headline; when details are unavailable, explain the theme in a general educational way without inventing facts. Do not copy the headline or any article sentence: write a fresh learning article. In the sources output, include this exact URL, publisher, and time. The learner level is ${level}. ${languageInstruction} The annotations' term text must occur exactly in the passage. Return only data matching the requested schema.\n\nNEWS HEADLINE:\n${sourceDigest}`;
+}
+
+export function buildStudyJournalQuizPrompt(category: StudyJournalCategory, level: StudyJournalLevel, passage: string) {
+  return `Create a precise five-question reading quiz using ONLY the passage below. The learner level is ${level}. ${buildStudyJournalQuestionInstruction(category)} Every question must be answerable only from the supplied passage, and evidence must be an exact quote from it. Return only data matching the requested schema.\n\nPASSAGE:\n${passage}`;
 }
 
 function asText(value: unknown) {
@@ -194,8 +207,7 @@ export function normalizeStudyJournal(raw: unknown, category: StudyJournalCatego
   }).filter((item): item is StudyJournal["annotations"][number] => Boolean(item.kind && item.term && passage.includes(item.term))).slice(0, 10);
   if (!title || passage.length < 80 || !translation || sources.length === 0 || annotations.length === 0) throw new Error("出典または学習解説が不足しているため、もう一度生成してください");
   if (category === "english" && (!/[ぁ-んァ-ン一-龯]/.test(translation) || annotations.some(item => !/[ぁ-んァ-ン一-龯]/.test(item.meaning) || !/[ぁ-んァ-ン一-龯]/.test(item.explanation)))) throw new Error("英語版の解説は日本語で生成してください");
-  const questions = normalizeStudyJournalQuestions(value.questions, passage, category);
-  return { title, passage, translation, annotations, sources, questions, generatedAt: new Date().toISOString(), category, level };
+  return { title, passage, translation, annotations, sources, questions: [], generatedAt: new Date().toISOString(), category, level };
 }
 
 function parseJournalJson(content: string) {
@@ -207,33 +219,58 @@ function parseJournalJson(content: string) {
   try { return JSON.parse(trimmed.slice(start, end + 1)); } catch { throw new Error("StudyJournalの形式を確認できませんでした。もう一度生成してください"); }
 }
 
+async function generateStudyJournalQuestions(category: StudyJournalCategory, level: StudyJournalLevel, passage: string) {
+  const response = await Promise.race([
+    invokeLLM({
+      model: "gpt-5-mini",
+      messages: [
+        { role: "system", content: "You are a precise reading-test editor. Follow the requested question distribution exactly and never ask outside-knowledge questions." },
+        { role: "user", content: buildStudyJournalQuizPrompt(category, level, passage) },
+      ],
+      maxCompletionTokens: 3200,
+      reasoning: { effort: "medium" },
+      outputSchema: journalQuestionSchema,
+    }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("記事問題の生成に時間がかかっています。通信状況を確認して、もう一度お試しください")), 35_000)),
+  ]);
+  const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
+  if (typeof content !== "string") throw new Error("記事問題の生成内容を受け取れませんでした");
+  const raw = parseJournalJson(content) as Record<string, unknown>;
+  return normalizeStudyJournalQuestions(raw.questions, passage, category);
+}
+
+async function generateCompleteStudyJournal(category: StudyJournalCategory, level: StudyJournalLevel, sources: NewsSource[], timeoutMessage: string) {
+  const response = await Promise.race([
+    invokeLLM({
+      model: "gemini-3-flash-preview",
+      messages: [
+        { role: "system", content: "You are a careful educational editor. Use only the supplied current-news candidates. Never fabricate events, sources, or publication times." },
+        { role: "user", content: buildStudyJournalPrompt(category, level, sources) },
+      ],
+      maxTokens: 4200,
+      reasoningEffort: "low",
+      outputSchema: journalSchema,
+    }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), 35_000)),
+  ]);
+  const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
+  if (typeof content !== "string") throw new Error("StudyJournalの生成内容を受け取れませんでした");
+  const journal = normalizeStudyJournal(parseJournalJson(content), category, level);
+  const questions = await generateStudyJournalQuestions(category, level, journal.passage);
+  return { ...journal, questions };
+}
+
 export async function generateStudyJournal(pin: string, category: StudyJournalCategory, level: StudyJournalLevel) {
   await requireExistingLearner(pin);
   const allSources = await fetchRecentNewsSources(category);
   const turn = sourceTurnByCategory[category]++;
   const sources = selectStudyJournalSources(allSources, turn);
-  const generation = invokeLLM({
-    model: "gemini-3-flash-preview",
-    messages: [
-      { role: "system", content: "You are a careful educational editor. Use only the supplied current-news candidates. Never fabricate events, sources, or publication times." },
-      { role: "user", content: buildStudyJournalPrompt(category, level, sources) },
-    ],
-    maxTokens: 6000,
-    reasoningEffort: "low",
-    outputSchema: journalSchema,
-  });
-  const response = await Promise.race([
-    generation,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("StudyJournalの生成に時間がかかっています。通信状況を確認して、もう一度お試しください")), 45_000)),
-  ]);
-  const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
-  if (typeof content !== "string") throw new Error("StudyJournalの生成内容を受け取れませんでした");
   try {
-    const journal = normalizeStudyJournal(parseJournalJson(content), category, level);
+    const journal = await generateCompleteStudyJournal(category, level, sources, "StudyJournalの記事生成に時間がかかっています。通信状況を確認して、もう一度お試しください");
     const saved = await saveStudyJournalHistory(pin, journal);
     return { ...journal, entryId: saved.id };
   } catch (error) {
-    if (error instanceof Error && error.message.includes("出典または")) throw error;
+    if (error instanceof Error && (error.message.includes("出典または") || error.message.includes("問題") || error.message.includes("時間がかかっています"))) throw error;
     throw new Error("StudyJournalの形式を確認できませんでした。もう一度生成してください");
   }
 }
@@ -243,27 +280,12 @@ export async function generateTodayStudyJournal(pin: string, category: StudyJour
   const status = await getDailyStudyJournalStatus(pin);
   if (status.categories.find(item => item.category === category)?.used) throw new Error("今日の記事はこのカテゴリーですでに生成済みです。明日また挑戦できます。");
   const sources = selectStudyJournalSources(await fetchTodayNewsSources(category));
-  const response = await Promise.race([
-    invokeLLM({
-      model: "gemini-3-flash-preview",
-      messages: [
-        { role: "system", content: "You are a careful educational editor. Use only the supplied current-news candidate. Never fabricate events, sources, or publication times." },
-        { role: "user", content: buildStudyJournalPrompt(category, level, sources) },
-      ],
-      maxTokens: 6000,
-      reasoningEffort: "low",
-      outputSchema: journalSchema,
-    }),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("今日の記事の生成に時間がかかっています。通信状況を確認して、もう一度お試しください")), 45_000)),
-  ]);
-  const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
-  if (typeof content !== "string") throw new Error("今日の記事の生成内容を受け取れませんでした");
   try {
-    const journal = normalizeStudyJournal(parseJournalJson(content), category, level);
+    const journal = await generateCompleteStudyJournal(category, level, sources, "今日の記事の生成に時間がかかっています。通信状況を確認して、もう一度お試しください");
     const claimed = await claimDailyStudyJournal(pin, journal);
     return { ...journal, entryId: claimed.journalEntryId };
   } catch (error) {
-    if (error instanceof Error && (error.message.includes("今日の記事") || error.message.includes("出典または"))) throw error;
+    if (error instanceof Error && (error.message.includes("今日の記事") || error.message.includes("出典または") || error.message.includes("問題") || error.message.includes("時間がかかっています"))) throw error;
     throw new Error("今日の記事の形式を確認できませんでした。もう一度生成してください");
   }
 }
