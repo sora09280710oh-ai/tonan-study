@@ -15,7 +15,7 @@ describe("宇宙モチーフの起動体験", () => {
     expect(splash).toContain('const studyVerseIconUrl = "/manus-storage/IMG_0856_ab3fdaa7.jpeg"');
     expect(splash).toContain("export function SpaceSplash");
     expect(splash).toContain("useReducedMotion");
-    expect(splash).toContain("学びの宇宙をひらいています");
+    expect(splash).not.toContain("学びの宇宙をひらいています");
   });
 
   it("アプリ起動・PIN確認・初期データ読込で宇宙モチーフの表示を利用する", () => {

@@ -120,7 +120,6 @@ export function SpaceSplash({ visible }: { visible: boolean }) {
         >
           <div className="flex items-center justify-center gap-2 text-xs font-semibold tracking-[0.26em] text-sky-200"><Sparkles className="h-3.5 w-3.5" aria-hidden="true" />LEARNING UNIVERSE</div>
           <h1 className="mt-3 text-3xl font-bold tracking-tight">StudyVerse</h1>
-          <p className="mt-3 text-sm leading-6 text-slate-300">学びの宇宙をひらいています</p>
         </motion.div>
         <motion.div
           aria-hidden="true"
