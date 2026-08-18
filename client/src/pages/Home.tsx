@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useTheme } from "@/contexts/ThemeContext";
 import { trpc } from "@/lib/trpc";
+import { missionEventForCompletedSession, shouldCompleteDailySelect } from "../../../shared/missionRules";
 import { cn } from "@/lib/utils";
 import { format, isSameDay, startOfMonth } from "date-fns";
 import { ja } from "date-fns/locale";
@@ -423,7 +424,7 @@ function CardSession({ entries, category, pin, mistakeEntryIds, onExit, initialS
   const [swipeOffset, setSwipeOffset] = useState(0);
   const current = mode === "test" ? testEntries[index] : practiceEntries[index];
   const nextPracticeEntry = practiceEntries[index + 1];
-  const finishTest = useCallback(() => { if (mode === "test") onMissionEvent?.("test"); else if (mode === "practice") onMissionEvent?.("practice"); if (!testCompletedRef.current) { testCompletedRef.current = true; if (testOnly) onTestComplete?.(); onSessionComplete?.(); } setMode("results"); }, [mode, onMissionEvent, onSessionComplete, onTestComplete, testOnly]);
+  const finishTest = useCallback(() => { if (mode === "test" || mode === "practice") onMissionEvent?.(missionEventForCompletedSession(mode)); if (!testCompletedRef.current) { testCompletedRef.current = true; if (shouldCompleteDailySelect(testOnly)) onTestComplete?.(); onSessionComplete?.(); } setMode("results"); }, [mode, onMissionEvent, onSessionComplete, onTestComplete, testOnly]);
   useEffect(() => { if (mode !== "test" || seconds <= 0) return; const timer = window.setInterval(() => setSeconds(value => value - 1), 1000); return () => window.clearInterval(timer); }, [mode, seconds]);
   useEffect(() => { if (mode === "test" && seconds === 0 && testEntries.length) finishTest(); }, [seconds, mode, testEntries.length, finishTest]);
   const orderEntries = (source: Entry[], direction: Direction) => { const ordered = [...source]; if (direction === "random") return ordered.sort(() => Math.random() - 0.5); if (direction === "reverse") return ordered.reverse(); return ordered; };
