@@ -150,7 +150,25 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+/**
+ * CardSession is a compact, generated single-line component. Keep its direct
+ * touch-move handler intact, while shortening only the post-swipe delay before
+ * the next card enters. This transform runs in development and production.
+ */
+function vitePluginFastCardSwipeExit(): Plugin {
+  return {
+    name: "tonan-fast-card-swipe-exit",
+    transform(code, id) {
+      if (!id.endsWith("/client/src/pages/Home.tsx")) return null;
+      const before = "}, animations ? 180 : 0); } else setSwipeOffset(0);";
+      const after = "}, animations ? 90 : 0); } else setSwipeOffset(0);";
+      if (!code.includes(before)) return null;
+      return { code: code.replace(before, after), map: null };
+    },
+  };
+}
+
+const plugins = [vitePluginFastCardSwipeExit(), react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
 
 export default defineConfig({
   plugins,
