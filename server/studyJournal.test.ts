@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { buildStudyJournalPrompt, buildStudyJournalQuizPrompt, normalizeStudyJournal, parseBbcWorldRss, parseMainichiRss, selectStudyJournalSources, selectTodayStudyJournalSources } from "./studyJournal";
 
+const noWritingTask = { format: "none", unit: "none", mode: "none", min: 0, max: 0, target: 0 };
 const englishQuestions = [
-  { id: "q1", kind: "choice", focus: "comprehension", prompt: "主な話題は何ですか。", choices: ["合意", "天気", "旅行", "料理"], correctChoice: 0, sampleAnswer: "合意", explanation: "各国の指導者は合意について協議しました。", evidence: "Leaders discussed a new agreement", rubric: "本文の内容に基づいて選ぶ。" },
-  { id: "q2", kind: "choice", focus: "comprehension", prompt: "協議はいつ行われましたか。", choices: ["会議の後", "朝食の前", "旅行中", "夜だけ"], correctChoice: 0, sampleAnswer: "会議の後", explanation: "会議の後に協議したとあります。", evidence: "after a major meeting", rubric: "本文の内容に基づいて選ぶ。" },
-  { id: "q3", kind: "choice", focus: "comprehension", prompt: "合意は何に影響する可能性がありますか。", choices: ["貿易", "天気", "音楽", "運動"], correctChoice: 0, sampleAnswer: "貿易", explanation: "貿易に影響する可能性があります。", evidence: "could affect trade", rubric: "本文の内容に基づいて選ぶ。" },
-  { id: "q4", kind: "choice", focus: "vocabulary", prompt: "agreementの意味は何ですか。", choices: ["合意", "会議", "地域", "指導者"], correctChoice: 0, sampleAnswer: "合意", explanation: "agreementは合意を表します。", evidence: "new agreement", rubric: "文脈に合う意味を選ぶ。" },
-  { id: "q5", kind: "writing", focus: "summary", prompt: "Write a 35-55 word English summary.", choices: [], correctChoice: -1, sampleAnswer: "Leaders discussed a new agreement after a major meeting. The agreement could affect trade and regional cooperation.", explanation: "中心となる出来事と影響を英語でまとめます。", evidence: "The agreement could affect trade and regional cooperation.", rubric: "内容、根拠、英語表現、指定語数を評価する。" },
+  { id: "q1", kind: "choice", focus: "comprehension", prompt: "主な話題は何ですか。", choices: ["合意", "天気", "旅行", "料理"], correctChoice: 0, sampleAnswer: "合意", explanation: "各国の指導者は合意について協議しました。", evidence: "Leaders discussed a new agreement", rubric: "本文の内容に基づいて選ぶ。", writingTask: noWritingTask },
+  { id: "q2", kind: "choice", focus: "comprehension", prompt: "協議はいつ行われましたか。", choices: ["会議の後", "朝食の前", "旅行中", "夜だけ"], correctChoice: 0, sampleAnswer: "会議の後", explanation: "会議の後に協議したとあります。", evidence: "after a major meeting", rubric: "本文の内容に基づいて選ぶ。", writingTask: noWritingTask },
+  { id: "q3", kind: "choice", focus: "comprehension", prompt: "合意は何に影響する可能性がありますか。", choices: ["貿易", "天気", "音楽", "運動"], correctChoice: 0, sampleAnswer: "貿易", explanation: "貿易に影響する可能性があります。", evidence: "could affect trade", rubric: "本文の内容に基づいて選ぶ。", writingTask: noWritingTask },
+  { id: "q4", kind: "choice", focus: "vocabulary", prompt: "agreementの意味は何ですか。", choices: ["合意", "会議", "地域", "指導者"], correctChoice: 0, sampleAnswer: "合意", explanation: "agreementは合意を表します。", evidence: "new agreement", rubric: "文脈に合う意味を選ぶ。", writingTask: noWritingTask },
+  { id: "q5", kind: "writing", focus: "summary", prompt: "Write a 35-55 word English summary.", choices: [], correctChoice: -1, sampleAnswer: "Leaders discussed a new agreement after a major meeting. The agreement could affect trade and regional cooperation.", explanation: "中心となる出来事と影響を英語でまとめます。", evidence: "The agreement could affect trade and regional cooperation.", rubric: "内容、根拠、英語表現、指定語数を評価する。", writingTask: { format: "summary", unit: "words", mode: "range", min: 35, max: 55, target: 0 } },
 ];
 
 describe("StudyJournal教材生成", () => {
@@ -20,7 +21,8 @@ describe("StudyJournal教材生成", () => {
     expect(prompt).toContain("4-5 annotations");
     const quizPrompt = buildStudyJournalQuizPrompt("english", "高校2年生", "An original English passage for testing.");
     expect(quizPrompt).toContain("exactly 5 questions");
-    expect(quizPrompt).toContain("35-55 word English summary");
+    expect(quizPrompt).toContain("format='extract'");
+    expect(quizPrompt).toContain("mode='range', 'max', or 'exact'");
   });
 
   it("漢字の指定では漢字読解と音読み・訓読みを要求する", () => {

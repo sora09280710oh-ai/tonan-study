@@ -251,7 +251,7 @@ export async function generateCompleteStudyJournal(category: StudyJournalCategor
       reasoningEffort: "low",
       outputSchema: journalSchema,
     }),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), 35_000)),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(timeoutMessage)), 50_000)),
   ]);
   const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
   if (typeof content !== "string") throw new Error("StudyJournalの生成内容を受け取れませんでした");
