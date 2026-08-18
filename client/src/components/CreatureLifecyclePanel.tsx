@@ -26,7 +26,7 @@ type CreatureHistory = {
   imageUrl: string | null;
 };
 
-export function CreatureLifecyclePanelV2({ pin, monster, history }: { pin: string; monster: { canStartNewCreature?: boolean } | undefined; history: CreatureHistory[] }) {
+export function CreatureLifecyclePanelV2({ pin, monster, history, embedded = false }: { pin: string; monster: { canStartNewCreature?: boolean } | undefined; history: CreatureHistory[]; embedded?: boolean }) {
   const utils = trpc.useUtils();
   const eggsQuery = trpc.learning.normalMissionStatus.useQuery({ pin });
   const [showHistory, setShowHistory] = useState(false);
@@ -44,14 +44,14 @@ export function CreatureLifecyclePanelV2({ pin, monster, history }: { pin: strin
   const availableEggs = unhatchedEggs((eggsQuery.data?.ownedEggs ?? []) as OwnedEgg[]);
 
   return <>
-    <Card className="border-emerald-300/50 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/20">
+    <Card className={embedded ? "border-white/30 bg-emerald-950/55 text-white shadow-md backdrop-blur-sm" : "border-emerald-300/50 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/20"}>
       <CardContent className="p-3">
         <div className="flex items-center justify-between gap-2">
-          <div>
+          <div className={embedded ? "hidden" : ""}>
             <p className="text-sm font-semibold">育成管理</p>
             <p className="text-[11px] text-muted-foreground">今まで育てた生物と、次に育てる卵を確認できます。</p>
           </div>
-          <Button size="sm" variant="outline" onClick={() => setShowHistory(value => !value)}>今まで育てたモンスター</Button>
+          <Button size="sm" variant="outline" className={embedded ? "border-white/50 bg-white/10 text-white hover:bg-white/20 hover:text-white" : ""} onClick={() => setShowHistory(value => !value)}>今まで育てたモンスター</Button>
         </div>
 
         {monster?.canStartNewCreature && <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:bg-amber-950/30">
@@ -72,7 +72,7 @@ export function CreatureLifecyclePanelV2({ pin, monster, history }: { pin: strin
         {showHistory && <div className="mt-3 grid grid-cols-2 gap-2">
           {history.map(creature => <div key={creature.id} className={cn("overflow-hidden rounded-xl border p-2", creature.isActive ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30" : "bg-background")}>
             {creature.imageUrl ? <img src={creature.imageUrl} alt={`${creature.name} 第${creature.stage}段階`} className="h-20 w-full object-contain" /> : <div className="flex h-20 items-center justify-center"><Sprout className="h-7 w-7 text-emerald-500" /></div>}
-            <p className="mt-1 truncate text-center text-xs font-semibold">{creature.name}</p>
+            <p className="mt-1 truncate text-center text-xs font-semibold">{creature.name === "はじまりの生物" ? "モンスター" : creature.name}</p>
             <p className="text-center text-[10px] text-muted-foreground">第{creature.stage}段階 / {creature.totalStages}</p>
             {creature.isActive && <Badge className="mt-1 w-full justify-center bg-emerald-600 text-[10px]">現在育てている</Badge>}
           </div>)}
