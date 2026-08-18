@@ -69,11 +69,18 @@ const journalSchema = {
 };
 
 type NewsSource = { title: string; url: string; publisher: string; publishedAt: string };
-let cachedSources: { expiresAt: number; sources: NewsSource[] } | null = null;
+const cachedSourcesByCategory: Partial<Record<StudyJournalCategory, { expiresAt: number; sources: NewsSource[] }>> = {};
+const sourceTurnByCategory: Record<StudyJournalCategory, number> = { english: 0, kanji: 0 };
+
+function unwrap(value: string) {
+  return value.replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
+}
+
+function field(item: string, name: string) {
+  return unwrap(item.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, "i"))?.[1] ?? "");
+}
 
 export function parseBbcWorldRss(xml: string): NewsSource[] {
-  const unwrap = (value: string) => value.replace(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/, "$1").replace(/&amp;/g, "&").replace(/&quot;/g, '"').trim();
-  const field = (item: string, name: string) => unwrap(item.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, "i"))?.[1] ?? "");
   const seen = new Set<string>();
   return Array.from(xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)).map(match => {
     const item = match[1] ?? "";
@@ -83,25 +90,40 @@ export function parseBbcWorldRss(xml: string): NewsSource[] {
       publisher: "BBC News",
       publishedAt: field(item, "pubDate"),
     };
-  }).filter(item => item.title && item.url.startsWith("https://") && item.publishedAt && !seen.has(item.url) && Boolean(seen.add(item.url))).slice(0, 3);
+  }).filter(item => item.title && item.url.startsWith("https://") && item.publishedAt && !seen.has(item.url) && Boolean(seen.add(item.url))).slice(0, 10);
 }
 
-async function fetchRecentWorldSources(): Promise<NewsSource[]> {
-  if (cachedSources && cachedSources.expiresAt > Date.now()) return cachedSources.sources;
+export function parseMainichiRss(xml: string): NewsSource[] {
+  const seen = new Set<string>();
+  return Array.from(xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)).map(match => {
+    const item = match[1] ?? "";
+    return { title: field(item, "title"), url: field(item, "link"), publisher: "毎日新聞", publishedAt: field(item, "dc:date") || field(item, "pubDate") };
+  }).filter(item => item.title && item.url.startsWith("https://") && item.publishedAt && !seen.has(item.url) && Boolean(seen.add(item.url))).slice(0, 20);
+}
+
+export function selectStudyJournalSources(sources: NewsSource[], turn = 0): NewsSource[] {
+  if (!sources.length) return [];
+  return [sources[turn % sources.length]!];
+}
+
+async function fetchRecentNewsSources(category: StudyJournalCategory): Promise<NewsSource[]> {
+  const cached = cachedSourcesByCategory[category];
+  if (cached && cached.expiresAt > Date.now()) return cached.sources;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
   try {
-    const url = "https://feeds.bbci.co.uk/news/world/rss.xml";
+    const isEnglish = category === "english";
+    const url = isEnglish ? "https://www3.nhk.or.jp/nhkworld/data/en/news/backstory/rss.xml" : "https://mainichi.jp/rss/etc/mai/today.rss";
     const response = await fetch(url, { signal: controller.signal, headers: { accept: "application/rss+xml, application/xml, text/xml" } });
     if (!response.ok) throw new Error("最新記事の取得に失敗しました");
     const xml = await response.text();
-    const sources = parseBbcWorldRss(xml);
-    if (sources.length < 2) throw new Error("直近のニュース候補が不足しています");
-    cachedSources = { sources, expiresAt: Date.now() + 15 * 60_000 };
+    const sources = isEnglish ? parseBbcWorldRss(xml).map(source => ({ ...source, publisher: "NHK WORLD-JAPAN News" })) : parseMainichiRss(xml);
+    if (sources.length < 2) throw new Error("直近ニュース候補が不足しています");
+    cachedSourcesByCategory[category] = { sources, expiresAt: Date.now() + 15 * 60_000 };
     return sources;
   } catch (error) {
-    console.warn("[StudyJournal] RSS source fetch failed", error);
-    throw new Error("直近ニュースを取得できませんでした。時間をおいてもう一度生成してください");
+    console.warn("[StudyJournal] news source fetch failed", error);
+    throw new Error("直近の報道記事を取得できませんでした。時間をおいてもう一度生成してください");
   } finally {
     clearTimeout(timeout);
   }
@@ -112,7 +134,7 @@ export function buildStudyJournalPrompt(category: StudyJournalCategory, level: S
     ? "Write a 190-240 word ORIGINAL English World Briefing. The reading must be fully in English. After the reader finishes, provide a concise natural Japanese translation. Choose 4-5 annotations: important vocabulary uses kind='word', and useful sentence patterns use kind='grammar'. For non-kanji annotations, onyomi and kunyomi must be empty strings."
     : "Write a 300-420 Japanese-character ORIGINAL 世界の出来事の読解文. Use more kanji than ordinary casual Japanese while keeping the specified learner level. After the reader finishes, provide a concise simple Japanese explanation of the passage in translation. Choose 4-5 important kanji or compound words using kind='kanji'; include accurate onyomi and kunyomi when they exist. For readings that do not normally use one type, use an empty string.";
   const sourceDigest = sources.map((source, index) => `${index + 1}. title=${source.title}\npublisher=${source.publisher}\npublishedAt=${source.publishedAt}\nurl=${source.url}`).join("\n\n");
-  return `Today is ${now.toISOString()}. Create an educational reading from the following current international-news headlines. Do not claim to cover every event in the world. State only details supported by these headlines; do not invent facts. Do not copy headline or article sentences: write a fresh learning summary. Keep these exact source URLs, publishers, and times in the sources output. The learner level is ${level}. ${languageInstruction} The annotations' term text must occur exactly in the passage. Return only data matching the requested schema.\n\nCURRENT NEWS CANDIDATES:\n${sourceDigest}`;
+  return `Today is ${now.toISOString()}. Create an educational reading using ONLY the following recent news headline as the central topic. This is one article and one topic only: do not add other news topics. State only details supported by the headline; when details are unavailable, explain the theme in a general educational way without inventing facts. Do not copy the headline or any article sentence: write a fresh learning article. In the sources output, include this exact URL, publisher, and time. The learner level is ${level}. ${languageInstruction} The annotations' term text must occur exactly in the passage. Return only data matching the requested schema.\n\nRECENT NEWS HEADLINE:\n${sourceDigest}`;
 }
 
 function asText(value: unknown) {
@@ -151,7 +173,9 @@ function parseJournalJson(content: string) {
 
 export async function generateStudyJournal(pin: string, category: StudyJournalCategory, level: StudyJournalLevel) {
   await requireExistingLearner(pin);
-  const sources = await fetchRecentWorldSources();
+  const allSources = await fetchRecentNewsSources(category);
+  const turn = sourceTurnByCategory[category]++;
+  const sources = selectStudyJournalSources(allSources, turn);
   const generation = invokeLLM({
     model: "gemini-3-flash-preview",
     messages: [

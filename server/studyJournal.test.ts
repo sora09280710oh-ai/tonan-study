@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildStudyJournalPrompt, normalizeStudyJournal, parseBbcWorldRss } from "./studyJournal";
+import { buildStudyJournalPrompt, normalizeStudyJournal, parseBbcWorldRss, parseMainichiRss, selectStudyJournalSources } from "./studyJournal";
 
 describe("StudyJournal教材生成", () => {
   it("英語の指定では英語本文と日本語訳、語彙・文法解説を要求する", () => {
@@ -45,5 +45,19 @@ describe("StudyJournal教材生成", () => {
       { title: "First report", url: "https://www.bbc.co.uk/news/first?at_medium=RSS&at_campaign=rss", publisher: "BBC News", publishedAt: "Mon, 17 Aug 2026 16:00:00 GMT" },
       { title: "Second report", url: "https://www.bbc.co.uk/news/second", publisher: "BBC News", publishedAt: "Mon, 17 Aug 2026 15:00:00 GMT" },
     ]);
+  });
+
+  it("1回の教材は1つの見出しだけを使い、次の生成では話題を順番に切り替える", () => {
+    const sources = Array.from({ length: 10 }, (_, index) => ({ title: `Source ${index + 1}`, url: `https://example.com/${index + 1}`, publisher: "Example News", publishedAt: "2026-08-18" }));
+    const first = selectStudyJournalSources(sources, 0);
+    const next = selectStudyJournalSources(sources, 1);
+    expect(first).toHaveLength(1);
+    expect(next).toHaveLength(1);
+    expect(next[0]?.url).not.toBe(first[0]?.url);
+  });
+
+  it("毎日新聞RSSのRSS 1.0形式から日本語の見出しと日時を抽出する", () => {
+    const sources = parseMainichiRss(`<rdf:RDF><item rdf:about="https://mainichi.jp/articles/example"><title>直近の新聞記事</title><link>https://mainichi.jp/articles/example</link><dc:date>2026-08-18T12:00:00+09:00</dc:date></item></rdf:RDF>`);
+    expect(sources).toEqual([{ title: "直近の新聞記事", url: "https://mainichi.jp/articles/example", publisher: "毎日新聞", publishedAt: "2026-08-18T12:00:00+09:00" }]);
   });
 });
