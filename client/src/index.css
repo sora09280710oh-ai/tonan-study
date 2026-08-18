@@ -154,6 +154,14 @@ div[class*="border-emerald-900"][class*="relative"][class*="h-full"] .absolute.i
   backdrop-filter: none !important;
 }
 
+/* 明るい森の画像上でも、枠を戻さず文字を読めるようにする。 */
+div[class*="border-emerald-900"][class*="relative"][class*="h-full"] .absolute.inset-x-3.top-3 *,
+div[class*="border-emerald-900"][class*="relative"][class*="h-full"] .absolute.inset-x-3.top-16 *,
+div[class*="border-emerald-900"][class*="relative"][class*="h-full"] .absolute.inset-x-4.bottom-3 * {
+  color: #052e27 !important;
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.72) !important;
+}
+
 @layer components {
   /**
    * Custom container utility that centers content and adds responsive padding.
