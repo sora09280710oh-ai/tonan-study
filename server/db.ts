@@ -586,6 +586,7 @@ export async function saveStudyJournalHistory(pin: string, journal: StudyJournal
     translation: journal.translation,
     annotationsJson: JSON.stringify(journal.annotations),
     sourcesJson: JSON.stringify(journal.sources),
+    questionsJson: JSON.stringify(journal.questions),
   }).$returningId();
   const id = created[0]?.id;
   if (!id) throw new Error("StudyJournal履歴を保存できませんでした");
@@ -617,9 +618,11 @@ export async function getStudyJournalHistoryEntry(pin: string, entryId: number):
     translation: entry.translation,
     annotations: parseJournalArray<StudyJournal["annotations"][number]>(entry.annotationsJson),
     sources: parseJournalArray<StudyJournal["sources"][number]>(entry.sourcesJson),
+    questions: parseJournalArray<StudyJournal["questions"][number]>(entry.questionsJson),
     generatedAt: entry.createdAt.toISOString(),
     category: entry.category,
     level: entry.level as StudyJournal["level"],
+    entryId: entry.id,
   };
 }
 
@@ -654,6 +657,7 @@ export async function claimDailyStudyJournal(pin: string, journal: StudyJournal)
         translation: journal.translation,
         annotationsJson: JSON.stringify(journal.annotations),
         sourcesJson: JSON.stringify(journal.sources),
+        questionsJson: JSON.stringify(journal.questions),
       }).$returningId();
       const id = created[0]?.id;
       if (!id) throw new Error("今日の記事を保存できませんでした");

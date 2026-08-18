@@ -1,0 +1,1 @@
+ALTER TABLE `studyJournalEntries` ADD `questionsJson` varchar(16000) DEFAULT '[]' NOT NULL;

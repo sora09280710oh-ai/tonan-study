@@ -1,5 +1,6 @@
 import { invokeLLM } from "./_core/llm";
 import { appDateString, claimDailyStudyJournal, getDailyStudyJournalStatus, requireExistingLearner, saveStudyJournalHistory } from "./db";
+import { buildStudyJournalQuestionInstruction, normalizeStudyJournalQuestions, studyJournalQuestionJsonSchema, type StudyJournalQuestion } from "./studyJournalQuiz";
 
 export const STUDY_JOURNAL_LEVELS = ["中学生", "高校1年生", "高校2年生", "高校3年生", "大学生"] as const;
 export type StudyJournalLevel = typeof STUDY_JOURNAL_LEVELS[number];
@@ -21,6 +22,8 @@ export type StudyJournal = {
   generatedAt: string;
   category: StudyJournalCategory;
   level: StudyJournalLevel;
+  questions: StudyJournalQuestion[];
+  entryId?: number;
 };
 
 const journalSchema = {
@@ -62,8 +65,9 @@ const journalSchema = {
           additionalProperties: false,
         },
       },
+      questions: studyJournalQuestionJsonSchema,
     },
-    required: ["title", "passage", "translation", "annotations", "sources"],
+    required: ["title", "passage", "translation", "annotations", "sources", "questions"],
     additionalProperties: false,
   },
 };
@@ -163,7 +167,8 @@ export function buildStudyJournalPrompt(category: StudyJournalCategory, level: S
     ? "Write a 190-240 word ORIGINAL English World Briefing. The reading must be fully in English. After the reader finishes, provide a concise natural Japanese translation. Choose 4-5 annotations: important vocabulary uses kind='word', and useful sentence patterns use kind='grammar'. The term may be English, but every annotation meaning and explanation MUST be natural Japanese; do not write annotation explanations in English. For non-kanji annotations, onyomi and kunyomi must be empty strings."
     : "Write a 300-420 Japanese-character ORIGINAL 世界の出来事の読解文. Use more kanji than ordinary casual Japanese while keeping the specified learner level. After the reader finishes, provide a concise simple Japanese explanation of the passage in translation. Choose 4-5 important kanji or compound words using kind='kanji'; include accurate onyomi and kunyomi when they exist. For readings that do not normally use one type, use an empty string.";
   const sourceDigest = sources.map((source, index) => `${index + 1}. title=${source.title}\npublisher=${source.publisher}\npublishedAt=${source.publishedAt}\nurl=${source.url}`).join("\n\n");
-  return `Today is ${now.toISOString()}. Create an educational reading using ONLY the following supplied news headline as the central topic. The source may be a recent report or an older report selected from the available archive. This is one article and one topic only: do not add other news topics. State only details supported by the headline; when details are unavailable, explain the theme in a general educational way without inventing facts. Do not copy the headline or any article sentence: write a fresh learning article. In the sources output, include this exact URL, publisher, and time. The learner level is ${level}. ${languageInstruction} The annotations' term text must occur exactly in the passage. Return only data matching the requested schema.\n\nNEWS HEADLINE:\n${sourceDigest}`;
+  const questionInstruction = buildStudyJournalQuestionInstruction(category);
+  return `Today is ${now.toISOString()}. Create an educational reading using ONLY the following supplied news headline as the central topic. The source may be a recent report or an older report selected from the available archive. This is one article and one topic only: do not add other news topics. State only details supported by the headline; when details are unavailable, explain the theme in a general educational way without inventing facts. Do not copy the headline or any article sentence: write a fresh learning article. In the sources output, include this exact URL, publisher, and time. The learner level is ${level}. ${languageInstruction} ${questionInstruction} The annotations' term text must occur exactly in the passage. The five questions must be solvable only from the passage; never ask about outside knowledge. Return only data matching the requested schema.\n\nNEWS HEADLINE:\n${sourceDigest}`;
 }
 
 function asText(value: unknown) {
@@ -189,7 +194,8 @@ export function normalizeStudyJournal(raw: unknown, category: StudyJournalCatego
   }).filter((item): item is StudyJournal["annotations"][number] => Boolean(item.kind && item.term && passage.includes(item.term))).slice(0, 10);
   if (!title || passage.length < 80 || !translation || sources.length === 0 || annotations.length === 0) throw new Error("出典または学習解説が不足しているため、もう一度生成してください");
   if (category === "english" && (!/[ぁ-んァ-ン一-龯]/.test(translation) || annotations.some(item => !/[ぁ-んァ-ン一-龯]/.test(item.meaning) || !/[ぁ-んァ-ン一-龯]/.test(item.explanation)))) throw new Error("英語版の解説は日本語で生成してください");
-  return { title, passage, translation, annotations, sources, generatedAt: new Date().toISOString(), category, level };
+  const questions = normalizeStudyJournalQuestions(value.questions, passage, category);
+  return { title, passage, translation, annotations, sources, questions, generatedAt: new Date().toISOString(), category, level };
 }
 
 function parseJournalJson(content: string) {
@@ -224,8 +230,8 @@ export async function generateStudyJournal(pin: string, category: StudyJournalCa
   if (typeof content !== "string") throw new Error("StudyJournalの生成内容を受け取れませんでした");
   try {
     const journal = normalizeStudyJournal(parseJournalJson(content), category, level);
-    await saveStudyJournalHistory(pin, journal);
-    return journal;
+    const saved = await saveStudyJournalHistory(pin, journal);
+    return { ...journal, entryId: saved.id };
   } catch (error) {
     if (error instanceof Error && error.message.includes("出典または")) throw error;
     throw new Error("StudyJournalの形式を確認できませんでした。もう一度生成してください");
@@ -254,8 +260,8 @@ export async function generateTodayStudyJournal(pin: string, category: StudyJour
   if (typeof content !== "string") throw new Error("今日の記事の生成内容を受け取れませんでした");
   try {
     const journal = normalizeStudyJournal(parseJournalJson(content), category, level);
-    await claimDailyStudyJournal(pin, journal);
-    return journal;
+    const claimed = await claimDailyStudyJournal(pin, journal);
+    return { ...journal, entryId: claimed.journalEntryId };
   } catch (error) {
     if (error instanceof Error && (error.message.includes("今日の記事") || error.message.includes("出典または"))) throw error;
     throw new Error("今日の記事の形式を確認できませんでした。もう一度生成してください");

@@ -237,6 +237,7 @@ export const studyJournalEntries = mysqlTable("studyJournalEntries", {
   translation: text("translation").notNull(),
   annotationsJson: text("annotationsJson").notNull(),
   sourcesJson: text("sourcesJson").notNull(),
+  questionsJson: varchar("questionsJson", { length: 16000 }).notNull().default("[]"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 }, table => [
   index("studyJournalEntries_learner_created_idx").on(table.learnerId, table.createdAt),
