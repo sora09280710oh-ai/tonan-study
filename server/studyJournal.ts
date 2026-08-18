@@ -1,5 +1,5 @@
 import { invokeLLM } from "./_core/llm";
-import { requireExistingLearner, saveStudyJournalHistory } from "./db";
+import { appDateString, claimDailyStudyJournal, getDailyStudyJournalStatus, requireExistingLearner, saveStudyJournalHistory } from "./db";
 
 export const STUDY_JOURNAL_LEVELS = ["中学生", "高校1年生", "高校2年生", "高校3年生", "大学生"] as const;
 export type StudyJournalLevel = typeof STUDY_JOURNAL_LEVELS[number];
@@ -106,6 +106,10 @@ export function selectStudyJournalSources(sources: NewsSource[], turn = 0): News
   return [sources[turn % sources.length]!];
 }
 
+export function selectTodayStudyJournalSources(sources: NewsSource[], articleDate = appDateString()): NewsSource[] {
+  return sources.filter(source => appDateString(new Date(source.publishedAt)) === articleDate);
+}
+
 async function fetchRecentNewsSources(category: StudyJournalCategory): Promise<NewsSource[]> {
   const cached = cachedSourcesByCategory[category];
   if (cached && cached.expiresAt > Date.now()) return cached.sources;
@@ -124,6 +128,26 @@ async function fetchRecentNewsSources(category: StudyJournalCategory): Promise<N
   } catch (error) {
     console.warn("[StudyJournal] news source fetch failed", error);
     throw new Error("直近の報道記事を取得できませんでした。時間をおいてもう一度生成してください");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchTodayNewsSources(category: StudyJournalCategory): Promise<NewsSource[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const url = category === "english" ? "https://feeds.bbci.co.uk/news/world/rss.xml" : "https://mainichi.jp/rss/etc/mai/today.rss";
+    const response = await fetch(url, { signal: controller.signal, headers: { accept: "application/rss+xml, application/xml, text/xml" } });
+    if (!response.ok) throw new Error("today source request failed");
+    const xml = await response.text();
+    const sources = category === "english" ? parseBbcWorldRss(xml).map(source => ({ ...source, publisher: "BBC News" })) : parseMainichiRss(xml);
+    const todaySources = selectTodayStudyJournalSources(sources);
+    if (!todaySources.length) throw new Error("today source not available");
+    return todaySources;
+  } catch (error) {
+    console.warn("[StudyJournal] today news source fetch failed", error);
+    throw new Error("今日公開された記事を取得できませんでした。時間をおいてもう一度お試しください");
   } finally {
     clearTimeout(timeout);
   }
@@ -199,5 +223,35 @@ export async function generateStudyJournal(pin: string, category: StudyJournalCa
   } catch (error) {
     if (error instanceof Error && error.message.includes("出典または")) throw error;
     throw new Error("StudyJournalの形式を確認できませんでした。もう一度生成してください");
+  }
+}
+
+export async function generateTodayStudyJournal(pin: string, category: StudyJournalCategory, level: StudyJournalLevel) {
+  await requireExistingLearner(pin);
+  const status = await getDailyStudyJournalStatus(pin);
+  if (status.categories.find(item => item.category === category)?.used) throw new Error("今日の記事はこのカテゴリーですでに生成済みです。明日また挑戦できます。");
+  const sources = selectStudyJournalSources(await fetchTodayNewsSources(category));
+  const response = await Promise.race([
+    invokeLLM({
+      model: "gemini-3-flash-preview",
+      messages: [
+        { role: "system", content: "You are a careful educational editor. Use only the supplied current-news candidate. Never fabricate events, sources, or publication times." },
+        { role: "user", content: buildStudyJournalPrompt(category, level, sources) },
+      ],
+      maxTokens: 6000,
+      reasoningEffort: "low",
+      outputSchema: journalSchema,
+    }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("今日の記事の生成に時間がかかっています。通信状況を確認して、もう一度お試しください")), 45_000)),
+  ]);
+  const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
+  if (typeof content !== "string") throw new Error("今日の記事の生成内容を受け取れませんでした");
+  try {
+    const journal = normalizeStudyJournal(parseJournalJson(content), category, level);
+    await claimDailyStudyJournal(pin, journal);
+    return journal;
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes("今日の記事") || error.message.includes("出典または"))) throw error;
+    throw new Error("今日の記事の形式を確認できませんでした。もう一度生成してください");
   }
 }

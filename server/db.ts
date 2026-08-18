@@ -7,6 +7,7 @@ import {
   cardSets,
   creatureStageImages,
   dailySelectAttempts,
+  dailyStudyJournalClaims,
   eggDefinitions,
   learnerCreatures,
   learnerEggs,
@@ -618,6 +619,50 @@ export async function getStudyJournalHistoryEntry(pin: string, entryId: number):
     category: entry.category,
     level: entry.level as StudyJournal["level"],
   };
+}
+
+export async function getDailyStudyJournalStatus(pin: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await requireExistingLearner(pin);
+  const articleDate = appDateString();
+  const claims = await db.select({ category: dailyStudyJournalClaims.category, journalEntryId: dailyStudyJournalClaims.journalEntryId }).from(dailyStudyJournalClaims).where(and(eq(dailyStudyJournalClaims.learnerId, learner.id), eq(dailyStudyJournalClaims.articleDate, articleDate)));
+  return {
+    articleDate,
+    categories: (["english", "kanji"] as StudyCategory[]).map(category => {
+      const claim = claims.find(item => item.category === category);
+      return { category, used: Boolean(claim), journalEntryId: claim?.journalEntryId ?? null };
+    }),
+  };
+}
+
+export async function claimDailyStudyJournal(pin: string, journal: StudyJournal) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await requireExistingLearner(pin);
+  const articleDate = appDateString();
+  try {
+    const journalEntryId = await db.transaction(async tx => {
+      const created = await tx.insert(studyJournalEntries).values({
+        learnerId: learner.id,
+        category: journal.category,
+        level: journal.level,
+        title: journal.title,
+        passage: journal.passage,
+        translation: journal.translation,
+        annotationsJson: JSON.stringify(journal.annotations),
+        sourcesJson: JSON.stringify(journal.sources),
+      }).$returningId();
+      const id = created[0]?.id;
+      if (!id) throw new Error("今日の記事を保存できませんでした");
+      await tx.insert(dailyStudyJournalClaims).values({ learnerId: learner.id, category: journal.category, articleDate, journalEntryId: id });
+      return id;
+    });
+    return { articleDate, journalEntryId };
+  } catch (error) {
+    if (isDuplicateMissionClaim(error)) throw new Error("今日の記事はこのカテゴリーですでに生成済みです。明日また挑戦できます。");
+    throw error;
+  }
 }
 
 async function accessibleBook(bookId: number, learnerId: number) {

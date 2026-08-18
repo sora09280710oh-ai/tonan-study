@@ -22,6 +22,7 @@ import {
   getAdminOverview,
   getDashboard,
   getDailySelectStatus,
+  getDailyStudyJournalStatus,
   getMissionStatus,
   getNormalMissionStatus,
   getStudyJournalHistoryEntry,
@@ -51,7 +52,7 @@ import {
   useRevivalTicket,
   verifyAdminPassword,
 } from "./db";
-import { generateStudyJournal, STUDY_JOURNAL_LEVELS } from "./studyJournal";
+import { generateStudyJournal, generateTodayStudyJournal, STUDY_JOURNAL_LEVELS } from "./studyJournal";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
@@ -83,6 +84,8 @@ export const appRouter = router({
     completeDailySelect: publicProcedure.input(z.object({ pin, category })).mutation(({ input }) => completeDailySelect(input.pin, input.category)),
     evolveMonster: publicProcedure.input(z.object({ pin })).mutation(({ input }) => evolveMonster(input.pin)),
     generateStudyJournal: publicProcedure.input(z.object({ pin, category, level: z.enum(STUDY_JOURNAL_LEVELS) })).mutation(({ input }) => generateStudyJournal(input.pin, input.category, input.level)),
+    dailyStudyJournalStatus: publicProcedure.input(z.object({ pin })).query(({ input }) => getDailyStudyJournalStatus(input.pin)),
+    generateTodayStudyJournal: publicProcedure.input(z.object({ pin, category, level: z.enum(STUDY_JOURNAL_LEVELS) })).mutation(({ input }) => generateTodayStudyJournal(input.pin, input.category, input.level)),
     studyJournalHistory: publicProcedure.input(z.object({ pin })).query(({ input }) => listStudyJournalHistory(input.pin)),
     studyJournalHistoryEntry: publicProcedure.input(z.object({ pin, entryId: z.number().int().positive() })).query(({ input }) => getStudyJournalHistoryEntry(input.pin, input.entryId)),
     login: publicProcedure.input(z.object({ pin })).mutation(({ input }) => loginLearner(input.pin)),

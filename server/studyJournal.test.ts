@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildStudyJournalPrompt, normalizeStudyJournal, parseBbcWorldRss, parseMainichiRss, selectStudyJournalSources } from "./studyJournal";
+import { buildStudyJournalPrompt, normalizeStudyJournal, parseBbcWorldRss, parseMainichiRss, selectStudyJournalSources, selectTodayStudyJournalSources } from "./studyJournal";
 
 describe("StudyJournal教材生成", () => {
   it("英語の指定では英語本文と日本語訳、語彙・文法解説を要求する", () => {
@@ -59,5 +59,13 @@ describe("StudyJournal教材生成", () => {
   it("毎日新聞RSSのRSS 1.0形式から日本語の見出しと日時を抽出する", () => {
     const sources = parseMainichiRss(`<rdf:RDF><item rdf:about="https://mainichi.jp/articles/example"><title>直近の新聞記事</title><link>https://mainichi.jp/articles/example</link><dc:date>2026-08-18T12:00:00+09:00</dc:date></item></rdf:RDF>`);
     expect(sources).toEqual([{ title: "直近の新聞記事", url: "https://mainichi.jp/articles/example", publisher: "毎日新聞", publishedAt: "2026-08-18T12:00:00+09:00" }]);
+  });
+
+  it("今日の記事ではJST当日公開の見出しだけを選ぶ", () => {
+    const sources = [
+      { title: "Today", url: "https://example.com/today", publisher: "Example News", publishedAt: "2026-08-18T00:10:00+09:00" },
+      { title: "Yesterday", url: "https://example.com/yesterday", publisher: "Example News", publishedAt: "2026-08-17T23:50:00+09:00" },
+    ];
+    expect(selectTodayStudyJournalSources(sources, "2026-08-18").map(source => source.title)).toEqual(["Today"]);
   });
 });
