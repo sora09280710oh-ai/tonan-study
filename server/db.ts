@@ -225,6 +225,25 @@ function claimedSet(rows: Array<{ missionId: string; periodKey: string }>, perio
   return new Set(rows.filter(row => row.periodKey === periodKey).map(row => row.missionId));
 }
 
+export function countCompletedMonthlyDailySelects(
+  attempts: Array<{ selectDate: string; completedAt: unknown }>,
+  month: string,
+) {
+  return attempts.filter(attempt => attempt.selectDate.startsWith(month) && Boolean(attempt.completedAt)).length;
+}
+
+export function isDailySelectCompletedOn(
+  attempts: Array<{ category: StudyCategory; selectDate: string; completedAt: unknown }>,
+  category: StudyCategory,
+  date: string,
+) {
+  return attempts.some(attempt => attempt.category === category && attempt.selectDate === date && Boolean(attempt.completedAt));
+}
+
+export function missionPeriodKey(missionId: string, date: string) {
+  return missionId.startsWith("daily-") ? date : date.slice(0, 7);
+}
+
 export async function getMissionStatus(pin: string) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -242,9 +261,8 @@ export async function getMissionStatus(pin: string) {
   const monthEvents = events.filter(event => event.eventDate.startsWith(month));
   const loginDates = Array.from(new Set(events.filter(event => event.eventType === "login").map(event => event.eventDate)));
   const monthLoginDates = loginDates.filter(date => date.startsWith(month));
-  const monthCompletedAi = dailyAttempts.filter(attempt => attempt.selectDate.startsWith(month) && attempt.completedAt);
   const answerCount = monthEvents.filter(event => event.eventType === "answer").length;
-  const aiSelectCount = monthCompletedAi.length;
+  const aiSelectCount = countCompletedMonthlyDailySelects(dailyAttempts, month);
   const dailyClearDates = Array.from(new Set(events.filter(event => event.eventType === "daily_clear").map(event => event.eventDate)));
   const saturdays = monthLoginDates.filter(date => new Date(`${date}T00:00:00Z`).getUTCDay() === 6).length;
   const sundays = monthLoginDates.filter(date => new Date(`${date}T00:00:00Z`).getUTCDay() === 0).length;
@@ -261,8 +279,8 @@ export async function getMissionStatus(pin: string) {
   const monthClaimed = claimedSet(claims, month);
   const daily: MissionItem[] = [
     { id: "daily-login", title: "ログインする", group: "デイリー", current: todayEvents.some(event => event.eventType === "login") ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-login"), claimable: false },
-    { id: "daily-ai-english", title: "AIセレクト10（英語）を解く", group: "デイリー", current: dailyAttempts.some(attempt => attempt.category === "english" && attempt.selectDate === today && Boolean(attempt.completedAt)) ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-ai-english"), claimable: false },
-    { id: "daily-ai-kanji", title: "AIセレクト10（漢字）を解く", group: "デイリー", current: dailyAttempts.some(attempt => attempt.category === "kanji" && attempt.selectDate === today && Boolean(attempt.completedAt)) ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-ai-kanji"), claimable: false },
+    { id: "daily-ai-english", title: "AIセレクト10（英語）を解く", group: "デイリー", current: isDailySelectCompletedOn(dailyAttempts, "english", today) ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-ai-english"), claimable: false },
+    { id: "daily-ai-kanji", title: "AIセレクト10（漢字）を解く", group: "デイリー", current: isDailySelectCompletedOn(dailyAttempts, "kanji", today) ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-ai-kanji"), claimable: false },
     { id: "daily-test", title: "テストモードでテストを受ける", group: "デイリー", current: todayEvents.some(event => event.eventType === "test") ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-test"), claimable: false },
     { id: "daily-practice", title: "単語カードで練習をする", group: "デイリー", current: todayEvents.some(event => event.eventType === "practice") ? 1 : 0, target: 1, rewardPoints: DAILY_REWARD_POINTS, completed: false, claimed: dailyClaimed.has("daily-practice"), claimable: false },
   ].map(item => ({ ...item, completed: item.current >= item.target, claimable: item.current >= item.target && !item.claimed }));
@@ -299,7 +317,7 @@ export function buildMissionClaimPlan(
   const items = selectedItems.map(item => ({
     ...item,
     rewardPoints: getMissionClaimReward(item),
-    periodKey: item.id.startsWith("daily-") ? status.date : status.month,
+    periodKey: missionPeriodKey(item.id, status.date),
   }));
   return { items, rewardPoints: items.reduce((total, item) => total + item.rewardPoints, 0) };
 }
