@@ -1,5 +1,5 @@
 import { invokeLLM } from "./_core/llm";
-import { requireExistingLearner } from "./db";
+import { requireExistingLearner, saveStudyJournalHistory } from "./db";
 
 export const STUDY_JOURNAL_LEVELS = ["中学生", "高校1年生", "高校2年生", "高校3年生", "大学生"] as const;
 export type StudyJournalLevel = typeof STUDY_JOURNAL_LEVELS[number];
@@ -193,7 +193,9 @@ export async function generateStudyJournal(pin: string, category: StudyJournalCa
   const content = Array.isArray(response.choices) ? response.choices[0]?.message.content : null;
   if (typeof content !== "string") throw new Error("StudyJournalの生成内容を受け取れませんでした");
   try {
-    return normalizeStudyJournal(parseJournalJson(content), category, level);
+    const journal = normalizeStudyJournal(parseJournalJson(content), category, level);
+    await saveStudyJournalHistory(pin, journal);
+    return journal;
   } catch (error) {
     if (error instanceof Error && error.message.includes("出典または")) throw error;
     throw new Error("StudyJournalの形式を確認できませんでした。もう一度生成してください");

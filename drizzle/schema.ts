@@ -211,6 +211,22 @@ export const dailySelectAttempts = mysqlTable("dailySelectAttempts", {
   index("dailySelect_learner_date_idx").on(table.learnerId, table.selectDate),
 ]);
 
+export const studyJournalEntries = mysqlTable("studyJournalEntries", {
+  id: int("id").autoincrement().primaryKey(),
+  learnerId: int("learnerId").notNull(),
+  category: mysqlEnum("category", ["english", "kanji"]).notNull(),
+  level: varchar("level", { length: 20 }).notNull(),
+  title: varchar("title", { length: 300 }).notNull(),
+  passage: text("passage").notNull(),
+  translation: text("translation").notNull(),
+  annotationsJson: text("annotationsJson").notNull(),
+  sourcesJson: text("sourcesJson").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [
+  index("studyJournalEntries_learner_created_idx").on(table.learnerId, table.createdAt),
+  index("studyJournalEntries_learner_category_idx").on(table.learnerId, table.category),
+]);
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type Learner = typeof learners.$inferSelect;
@@ -256,6 +272,7 @@ export const learnerPointBalances = mysqlTable("learnerPointBalances", {
 });
 
 export type DailySelectAttempt = typeof dailySelectAttempts.$inferSelect;
+export type StudyJournalEntry = typeof studyJournalEntries.$inferSelect;
 export type MissionEvent = typeof missionEvents.$inferSelect;
 export type MissionClaim = typeof missionClaims.$inferSelect;
 export type LearnerPointBalance = typeof learnerPointBalances.$inferSelect;

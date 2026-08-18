@@ -19,6 +19,7 @@ import {
   normalMissionClaims,
   normalMissions,
   recommendedTests,
+  studyJournalEntries,
   studyProgress,
   studySessions,
   users,
@@ -30,6 +31,7 @@ import { calculateStreak, nextReviewDate, nextStrength } from "./studyLogic";
 import { ENV } from "./_core/env";
 import { invokeLLM } from "./_core/llm";
 import { storagePut } from "./storage";
+import type { StudyJournal } from "./studyJournal";
 
 export type StudyCategory = "english" | "kanji";
 type EntryDraft = { front: string; back: string; writingAnswer?: string | null; importBatchId?: string | null };
@@ -557,6 +559,65 @@ export async function requireExistingLearner(pin: string) {
   const learner = (await db.select().from(learners).where(eq(learners.pinHash, pinHash(pin))).limit(1))[0];
   if (!learner) throw new Error("StudyJournalを使うには、先にPINで学習を開始してください");
   return learner;
+}
+
+function parseJournalArray<T>(value: string): T[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveStudyJournalHistory(pin: string, journal: StudyJournal) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await requireExistingLearner(pin);
+  const created = await db.insert(studyJournalEntries).values({
+    learnerId: learner.id,
+    category: journal.category,
+    level: journal.level,
+    title: journal.title,
+    passage: journal.passage,
+    translation: journal.translation,
+    annotationsJson: JSON.stringify(journal.annotations),
+    sourcesJson: JSON.stringify(journal.sources),
+  }).$returningId();
+  const id = created[0]?.id;
+  if (!id) throw new Error("StudyJournal履歴を保存できませんでした");
+  return { id };
+}
+
+export async function listStudyJournalHistory(pin: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await requireExistingLearner(pin);
+  return db.select({
+    id: studyJournalEntries.id,
+    category: studyJournalEntries.category,
+    level: studyJournalEntries.level,
+    title: studyJournalEntries.title,
+    createdAt: studyJournalEntries.createdAt,
+  }).from(studyJournalEntries).where(eq(studyJournalEntries.learnerId, learner.id)).orderBy(desc(studyJournalEntries.createdAt)).limit(100);
+}
+
+export async function getStudyJournalHistoryEntry(pin: string, entryId: number): Promise<StudyJournal> {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await requireExistingLearner(pin);
+  const entry = (await db.select().from(studyJournalEntries).where(and(eq(studyJournalEntries.id, entryId), eq(studyJournalEntries.learnerId, learner.id))).limit(1))[0];
+  if (!entry) throw new Error("指定されたStudyJournal履歴は見つかりません");
+  return {
+    title: entry.title,
+    passage: entry.passage,
+    translation: entry.translation,
+    annotations: parseJournalArray<StudyJournal["annotations"][number]>(entry.annotationsJson),
+    sources: parseJournalArray<StudyJournal["sources"][number]>(entry.sourcesJson),
+    generatedAt: entry.createdAt.toISOString(),
+    category: entry.category,
+    level: entry.level as StudyJournal["level"],
+  };
 }
 
 async function accessibleBook(bookId: number, learnerId: number) {
