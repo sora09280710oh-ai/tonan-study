@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { monsterEvolutionFromSeconds, monsterManualProgressFromSeconds } from "./db";
+import { applyMissionMinutesToSeconds, monsterEvolutionFromSeconds, monsterManualProgressFromSeconds } from "./db";
 
 describe("モンスター進化ロジック", () => {
   it("開始時は第1段階で、20時間ごとに1段階進化する", () => {
@@ -28,5 +28,13 @@ describe("モンスター進化ロジック", () => {
     expect(afterFirstEvolution.stage).toBe(2);
     expect(afterFirstEvolution.unlockedStage).toBe(4);
     expect(afterFirstEvolution.canEvolve).toBe(true);
+  });
+
+  it("ミッション報酬の1分加算で到達した進化は、手動操作後にのみ段階へ反映する", () => {
+    const beforeReward = 19 * 3600 + 59 * 60;
+    const afterReward = applyMissionMinutesToSeconds(beforeReward, 1);
+    const readyToEvolve = monsterManualProgressFromSeconds(afterReward, 1);
+    expect(readyToEvolve).toMatchObject({ stage: 1, unlockedStage: 2, canEvolve: true });
+    expect(monsterManualProgressFromSeconds(afterReward, 2)).toMatchObject({ stage: 2, canEvolve: false });
   });
 });
