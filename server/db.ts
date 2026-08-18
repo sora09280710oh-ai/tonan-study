@@ -208,6 +208,14 @@ const monthlyMissionDefinitions = [
   ...[1, 5, 10, 15, 20, 25, 30].map(target => ({ id: `monthly-daily-${target}`, title: `デイリーミッションを${target}回全クリアする`, group: "デイリー連動", metric: "dailyClears", target })),
 ] as const;
 
+export function monthlyMissionDefinitionsForMonth(monthKey: string) {
+  const [yearText, monthText] = monthKey.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return monthlyMissionDefinitions;
+  return monthlyMissionDefinitions.filter(definition => definition.metric !== "loginDays" || monthlyLoginTargetAvailable(definition.target, year, month));
+}
+
 async function recordMissionEventForLearner(learnerId: number, eventType: "login" | "test" | "practice" | "answer" | "daily_select" | "daily_clear", category: StudyCategory, eventKey?: string) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -286,7 +294,7 @@ export async function getMissionStatus(pin: string) {
   ].map(item => ({ ...item, completed: item.current >= item.target, claimable: item.current >= item.target && !item.claimed }));
   const dailyClear = daily.every(item => item.completed);
   const dailyBonus: MissionItem = { id: "daily-all-clear", title: "デイリーミッションを全部クリアする", group: "デイリー", current: daily.filter(item => item.completed).length, target: daily.length, rewardPoints: DAILY_ALL_CLEAR_REWARD, completed: dailyClear, claimed: dailyClaimed.has("daily-all-clear"), claimable: dailyClear && !dailyClaimed.has("daily-all-clear") };
-  const monthly: MissionItem[] = monthlyMissionDefinitions.map(definition => {
+  const monthly: MissionItem[] = monthlyMissionDefinitionsForMonth(month).map(definition => {
     const current = metrics[definition.metric] ?? 0;
     const claimed = monthClaimed.has(definition.id);
     return { id: definition.id, title: definition.title, group: definition.group, current, target: definition.target, rewardPoints: 1, completed: current >= definition.target, claimed, claimable: current >= definition.target && !claimed };

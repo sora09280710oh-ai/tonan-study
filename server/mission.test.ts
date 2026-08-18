@@ -7,6 +7,7 @@ import {
   appDateString,
   appMonthString,
   monthlyLoginTargetAvailable,
+  monthlyMissionDefinitionsForMonth,
   monsterEvolutionFromSeconds,
   getMissionClaimReward,
   applyMissionMinutesToSeconds,
@@ -39,6 +40,9 @@ describe("mission rules", () => {
     expect(monthlyLoginTargetAvailable(30, 2026, 2)).toBe(false);
     expect(monthlyLoginTargetAvailable(30, 2028, 2)).toBe(false);
     expect(monthlyLoginTargetAvailable(30, 2026, 4)).toBe(true);
+    expect(monthlyMissionDefinitionsForMonth("2026-02").some(item => item.id === "monthly-login-30")).toBe(false);
+    expect(monthlyMissionDefinitionsForMonth("2028-02").some(item => item.id === "monthly-login-30")).toBe(false);
+    expect(monthlyMissionDefinitionsForMonth("2026-04").some(item => item.id === "monthly-login-30")).toBe(true);
   });
 
   it("applies claimed mission minutes to monster evolution seconds", () => {
