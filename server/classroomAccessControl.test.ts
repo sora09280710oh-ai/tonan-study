@@ -28,6 +28,7 @@ describe("教室単位の権限分離", () => {
     expect(db).toContain("classroomVisibleFilter(announcements.classroomId, learner.classroomId)");
     expect(db).toContain("classroomVisibleFilter(recommendedTests.classroomId, learner.classroomId)");
     expect(db).toContain("classroomVisibleFilter(calendarEvents.classroomId, learner.classroomId)");
+    expect(db).toContain('book.ownerId === learner.id || (book.kind === "standard" && (book.classroomId === null || book.classroomId === learner.classroomId))');
     expect(db).toContain('access.role === "teacher" && account.classroomId !== access.classroom.id');
   });
 

@@ -784,7 +784,8 @@ export async function listWordBooks(pin: string, category: StudyCategory) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  return db.select().from(wordBooks).where(and(eq(wordBooks.category, category), or(eq(wordBooks.ownerId, learner.id), classroomVisibleFilter(wordBooks.classroomId, learner.classroomId)))).orderBy(desc(wordBooks.updatedAt));
+  const all = await db.select().from(wordBooks).where(eq(wordBooks.category, category)).orderBy(desc(wordBooks.updatedAt));
+  return all.filter(book => book.ownerId === learner.id || (book.kind === "standard" && (book.classroomId === null || book.classroomId === learner.classroomId)));
 }
 
 export async function listAccessibleWordBooks(pin: string, category: StudyCategory) {
