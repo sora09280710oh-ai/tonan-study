@@ -556,6 +556,14 @@ async function learnerForPin(pin: string) {
   return loginLearner(pin);
 }
 
+export async function updateLearnerDisplayName(pin: string, displayName: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const learner = await learnerForPin(pin);
+  await db.update(learners).set({ displayName }).where(eq(learners.id, learner.id));
+  return { id: learner.id, displayName };
+}
+
 export async function requireExistingLearner(pin: string) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -996,7 +1004,7 @@ export async function getDashboard(pin: string, category: StudyCategory) {
   const imageFor = (eggDefinitionId: number, stage: number) => stageImages.find(image => image.eggDefinitionId === eggDefinitionId && image.stage === stage)?.imageUrl ?? null;
   const monsterHistory = creatureRows.map(creature => ({ id: creature.id, eggDefinitionId: creature.eggDefinitionId, name: definitionsById.get(creature.eggDefinitionId)?.name ?? "生物", stage: creature.stage, totalStages: MONSTER_STAGE_COUNT, isActive: creature.id === activeCreature.id, imageUrl: imageFor(creature.eggDefinitionId, creature.stage), completedAt: creature.completedAt }));
   return {
-    learner: { id: learner.id, revivalTickets: learner.revivalTickets },
+    learner: { id: learner.id, displayName: learner.displayName, revivalTickets: learner.revivalTickets },
     books,
     entries,
     cardSets: cardSetList,

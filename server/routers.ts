@@ -57,6 +57,7 @@ import {
   saveAdminCalendarDisplaySetting,
   hatchEgg,
   useRevivalTicket,
+  updateLearnerDisplayName,
   verifyAdminPassword,
 } from "./db";
 import { generateStudyJournal, generateTodayStudyJournal, STUDY_JOURNAL_LEVELS } from "./studyJournal";
@@ -99,6 +100,7 @@ export const appRouter = router({
     gradeStudyJournalQuiz: publicProcedure.input(z.object({ pin, entryId: z.number().int().positive(), answers: z.array(z.object({ questionId: z.string().min(1).max(80), answer: z.string().max(2000) })).max(5) })).mutation(({ input }) => gradeStudyJournalQuiz(input.pin, input.entryId, input.answers)),
     login: publicProcedure.input(z.object({ pin })).mutation(({ input }) => loginLearner(input.pin)),
     dashboard: publicProcedure.input(z.object({ pin, category })).query(({ input }) => getDashboard(input.pin, input.category)),
+    updateDisplayName: publicProcedure.input(z.object({ pin, displayName: z.string().trim().min(1, "名前を入力してください").max(40, "名前は40文字以内で入力してください") })).mutation(({ input }) => updateLearnerDisplayName(input.pin, input.displayName)),
     dueReviewEntries: publicProcedure.input(z.object({ pin, category })).query(({ input }) => listDueReviewEntries(input.pin, input.category)),
     books: publicProcedure.input(z.object({ pin, category })).query(({ input }) => listAccessibleWordBooks(input.pin, input.category)),
     entries: publicProcedure.input(z.object({ pin, bookId: z.number().int().positive() })).query(({ input }) => getWordEntries(input.pin, input.bookId)),

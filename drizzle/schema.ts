@@ -15,6 +15,7 @@ export const users = mysqlTable("users", {
 export const learners = mysqlTable("learners", {
   id: int("id").autoincrement().primaryKey(),
   pinHash: varchar("pinHash", { length: 64 }).notNull().unique(),
+  displayName: varchar("displayName", { length: 40 }),
   revivalTickets: int("revivalTickets").notNull().default(2),
   monsterStage: int("monsterStage").notNull().default(1),
   activeCreatureId: int("activeCreatureId"),
