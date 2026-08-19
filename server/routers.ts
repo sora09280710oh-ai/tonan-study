@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   addCalendarEvent,
   createCardSet,
+  createClassroom,
   createLearnerEvent,
   createPersonalBook,
   deletePersonalEntry,
@@ -22,6 +23,7 @@ import {
   getAdminOverview,
   getAdminCalendarDisplaySetting,
   listAdminAccounts,
+  listClassrooms,
   getAdminAccountDetail,
   getDashboard,
   getDailySelectStatus,
@@ -98,7 +100,7 @@ export const appRouter = router({
     studyJournalHistory: publicProcedure.input(z.object({ pin })).query(({ input }) => listStudyJournalHistory(input.pin)),
     studyJournalHistoryEntry: publicProcedure.input(z.object({ pin, entryId: z.number().int().positive() })).query(({ input }) => getStudyJournalHistoryEntry(input.pin, input.entryId)),
     gradeStudyJournalQuiz: publicProcedure.input(z.object({ pin, entryId: z.number().int().positive(), answers: z.array(z.object({ questionId: z.string().min(1).max(80), answer: z.string().max(2000) })).max(5) })).mutation(({ input }) => gradeStudyJournalQuiz(input.pin, input.entryId, input.answers)),
-    login: publicProcedure.input(z.object({ pin })).mutation(({ input }) => loginLearner(input.pin)),
+    login: publicProcedure.input(z.object({ pin, classroomCode: z.string().trim().max(40).optional() })).mutation(({ input }) => loginLearner(input.pin, input.classroomCode)),
     dashboard: publicProcedure.input(z.object({ pin, category })).query(({ input }) => getDashboard(input.pin, input.category)),
     updateDisplayName: publicProcedure.input(z.object({ pin, displayName: z.string().trim().min(1, "名前を入力してください").max(40, "名前は40文字以内で入力してください") })).mutation(({ input }) => updateLearnerDisplayName(input.pin, input.displayName)),
     dueReviewEntries: publicProcedure.input(z.object({ pin, category })).query(({ input }) => listDueReviewEntries(input.pin, input.category)),
@@ -122,6 +124,8 @@ export const appRouter = router({
   }),
   admin: router({
     verify: publicProcedure.input(z.object({ password: z.string() })).mutation(({ input }) => verifyAdminPassword(input.password)),
+    classrooms: publicProcedure.input(z.object({ password: z.string() })).query(({ input }) => listClassrooms(input.password)),
+    createClassroom: publicProcedure.input(z.object({ password: z.string(), name: z.string().trim().min(1).max(120), teacherPassword: z.string().min(6).max(80) })).mutation(({ input }) => createClassroom(input.password, input)),
     overview: publicProcedure.input(z.object({ password: z.string() })).query(({ input }) => getAdminOverview(input.password)),
     calendarDisplaySetting: publicProcedure.input(z.object({ password: z.string() })).query(({ input }) => getAdminCalendarDisplaySetting(input.password)),
     saveCalendarDisplaySetting: publicProcedure.input(z.object({ password: z.string(), showCalendarExtras: z.boolean() })).mutation(({ input }) => saveAdminCalendarDisplaySetting(input.password, input.showCalendarExtras)),

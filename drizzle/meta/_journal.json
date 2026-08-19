@@ -127,6 +127,13 @@
       "when": 1787120273460,
       "tag": "0017_dark_maverick",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "5",
+      "when": 1787122400167,
+      "tag": "0018_needy_rick_jones",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -6,6 +6,7 @@ import {
   appSettings,
   calendarEvents,
   cardSets,
+  classrooms,
   creatureStageImages,
   dailySelectAttempts,
   dailyStudyJournalClaims,
@@ -38,6 +39,9 @@ import type { StudyJournal } from "./studyJournal";
 
 export type StudyCategory = "english" | "kanji";
 type EntryDraft = { front: string; back: string; writingAnswer?: string | null; importBatchId?: string | null };
+export type AdminAccess =
+  | { role: "owner" }
+  | { role: "teacher"; classroom: { id: number; name: string; joinCode: string } };
 
 export type KanjiAiGrade = {
   status: "correct" | "incorrect" | "ungradable";
@@ -478,6 +482,88 @@ function pinHash(pin: string) {
   return createHash("sha256").update(`tonan-study:${pin}`).digest("hex");
 }
 
+const OWNER_ADMIN_PASSWORD = "tonan2026";
+
+function teacherPasswordHash(password: string) {
+  return createHash("sha256").update(`tonan-study:teacher:${password}`).digest("hex");
+}
+
+export function normalizeJoinCode(value: string) {
+  return value.trim().toUpperCase().replace(/^STUDYVERSE:/, "").replace(/[^A-Z0-9]/g, "");
+}
+
+function classroomFilter<T extends { classroomId: unknown }>(column: T["classroomId"], classroomId: number | null) {
+  return classroomId === null ? isNull(column as never) : eq(column as never, classroomId);
+}
+
+function classroomVisibleFilter<T extends { classroomId: unknown }>(column: T["classroomId"], classroomId: number | null) {
+  return classroomId === null ? isNull(column as never) : or(isNull(column as never), eq(column as never, classroomId));
+}
+
+function accessClassroomId(access: AdminAccess) {
+  return access.role === "teacher" ? access.classroom.id : null;
+}
+
+async function nextJoinCode() {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const code = `SV${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+    const existing = (await db.select({ id: classrooms.id }).from(classrooms).where(eq(classrooms.joinCode, code)).limit(1))[0];
+    if (!existing) return code;
+  }
+  throw new Error("教室コードを発行できませんでした。もう一度お試しください。");
+}
+
+export async function getAdminAccess(password: string): Promise<AdminAccess | null> {
+  if (password === OWNER_ADMIN_PASSWORD) return { role: "owner" };
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const classroom = (await db.select().from(classrooms).where(eq(classrooms.teacherPasswordHash, teacherPasswordHash(password))).limit(1))[0];
+  return classroom ? { role: "teacher", classroom: { id: classroom.id, name: classroom.name, joinCode: classroom.joinCode } } : null;
+}
+
+async function requireAdminAccess(password: string) {
+  const access = await getAdminAccess(password);
+  if (!access) throw new Error("管理画面のパスワードが正しくありません");
+  return access;
+}
+
+async function requireOwnerAccess(password: string) {
+  const access = await requireAdminAccess(password);
+  if (access.role !== "owner") throw new Error("この操作は全体管理者のみ実行できます");
+  return access;
+}
+
+export async function createClassroom(password: string, input: { name: string; teacherPassword: string }) {
+  await requireOwnerAccess(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const name = input.name.trim();
+  if (!name) throw new Error("教室名を入力してください");
+  if (input.teacherPassword.length < 6 || input.teacherPassword.length > 80) throw new Error("先生用パスワードは6〜80文字で設定してください");
+  if (input.teacherPassword === OWNER_ADMIN_PASSWORD) throw new Error("全体管理者パスワードとは異なる先生用パスワードを設定してください");
+  const passwordHash = teacherPasswordHash(input.teacherPassword);
+  const passwordInUse = (await db.select({ id: classrooms.id }).from(classrooms).where(eq(classrooms.teacherPasswordHash, passwordHash)).limit(1))[0];
+  if (passwordInUse) throw new Error("その先生用パスワードはすでに使われています。別のパスワードを設定してください");
+  const joinCode = await nextJoinCode();
+  const created = await db.insert(classrooms).values({ name, joinCode, teacherPasswordHash: passwordHash }).$returningId();
+  const id = created[0]?.id;
+  if (!id) throw new Error("教室を作成できませんでした");
+  return { id, name, joinCode };
+}
+
+export async function listClassrooms(password: string) {
+  await requireOwnerAccess(password);
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  const [rooms, learnerRows] = await Promise.all([
+    db.select().from(classrooms).orderBy(desc(classrooms.createdAt)),
+    db.select({ classroomId: learners.classroomId }).from(learners),
+  ]);
+  return rooms.map(room => ({ id: room.id, name: room.name, joinCode: room.joinCode, createdAt: room.createdAt, learnerCount: learnerRows.filter(learner => learner.classroomId === room.id).length }));
+}
+
 const STANDARD_ENTRIES: Record<StudyCategory, EntryDraft[]> = {
   english: [
     { front: "努力", back: "effort" },
@@ -529,7 +615,7 @@ export async function ensureStandardBooks() {
   }
 }
 
-export async function loginLearner(pin: string) {
+export async function loginLearner(pin: string, classroomCode?: string) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   await ensureStandardBooks();
@@ -541,7 +627,11 @@ export async function loginLearner(pin: string) {
     await recordMissionEventForLearner(existing[0].id, "login", "english", `login-${appDateString()}`);
     return existing[0];
   }
-  const created = await db.insert(learners).values({ pinHash: hashed }).$returningId();
+  const normalizedClassroomCode = normalizeJoinCode(classroomCode ?? "");
+  if (!normalizedClassroomCode) throw new Error("初回ログインでは教室コードを入力してください");
+  const classroom = (await db.select().from(classrooms).where(eq(classrooms.joinCode, normalizedClassroomCode)).limit(1))[0];
+  if (!classroom) throw new Error("教室コードが見つかりません。先生に確認してください");
+  const created = await db.insert(learners).values({ pinHash: hashed, classroomId: classroom.id }).$returningId();
   const learnerId = created[0]?.id;
   if (!learnerId) throw new Error("Failed to create learner");
   const learner = await db.select().from(learners).where(eq(learners.id, learnerId)).limit(1);
@@ -679,12 +769,14 @@ export async function claimDailyStudyJournal(pin: string, journal: StudyJournal)
   }
 }
 
-async function accessibleBook(bookId: number, learnerId: number) {
+async function accessibleBook(bookId: number, learner: { id: number; classroomId: number | null }) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const result = await db.select().from(wordBooks).where(eq(wordBooks.id, bookId)).limit(1);
   const book = result[0];
-  if (!book || (book.kind === "personal" && book.ownerId !== learnerId)) throw new Error("Word book not found");
+  const inaccessiblePersonalBook = book?.kind === "personal" && book.ownerId !== learner.id;
+  const inaccessibleClassroomBook = book?.kind === "standard" && book.classroomId !== null && book.classroomId !== learner.classroomId;
+  if (!book || inaccessiblePersonalBook || inaccessibleClassroomBook) throw new Error("単語帳を利用できません");
   return book;
 }
 
@@ -692,7 +784,7 @@ export async function listWordBooks(pin: string, category: StudyCategory) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  return db.select().from(wordBooks).where(and(eq(wordBooks.category, category), inArray(wordBooks.kind, ["standard", "personal"]))).orderBy(desc(wordBooks.updatedAt));
+  return db.select().from(wordBooks).where(and(eq(wordBooks.category, category), or(eq(wordBooks.ownerId, learner.id), classroomVisibleFilter(wordBooks.classroomId, learner.classroomId)))).orderBy(desc(wordBooks.updatedAt));
 }
 
 export async function listAccessibleWordBooks(pin: string, category: StudyCategory) {
@@ -700,12 +792,12 @@ export async function listAccessibleWordBooks(pin: string, category: StudyCatego
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
   const all = await db.select().from(wordBooks).where(eq(wordBooks.category, category)).orderBy(desc(wordBooks.updatedAt));
-  return all.filter(book => book.kind === "standard" || book.ownerId === learner.id);
+  return all.filter(book => book.ownerId === learner.id || (book.kind === "standard" && (book.classroomId === null || book.classroomId === learner.classroomId)));
 }
 
 export async function getWordEntries(pin: string, bookId: number) {
   const learner = await learnerForPin(pin);
-  await accessibleBook(bookId, learner.id);
+  await accessibleBook(bookId, learner);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   return db.select().from(wordEntries).where(eq(wordEntries.bookId, bookId)).orderBy(wordEntries.entryNo);
@@ -715,7 +807,7 @@ export async function createPersonalBook(pin: string, category: StudyCategory, n
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  const created = await db.insert(wordBooks).values({ ownerId: learner.id, category, kind: "personal", name }).$returningId();
+  const created = await db.insert(wordBooks).values({ ownerId: learner.id, classroomId: learner.classroomId, category, kind: "personal", name }).$returningId();
   return created[0]?.id;
 }
 
@@ -723,7 +815,7 @@ export async function replacePersonalEntries(pin: string, bookId: number, entrie
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  const book = await accessibleBook(bookId, learner.id);
+  const book = await accessibleBook(bookId, learner);
   if (book.kind !== "personal") throw new Error("Standard word book cannot be imported");
   await db.delete(wordEntries).where(eq(wordEntries.bookId, bookId));
   if (entries.length) {
@@ -736,7 +828,7 @@ export async function savePersonalEntry(pin: string, input: { id?: number; bookI
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  const book = await accessibleBook(input.bookId, learner.id);
+  const book = await accessibleBook(input.bookId, learner);
   if (book.kind !== "personal") throw new Error("マイ単語帳のみ編集できます");
   if (input.id) {
     await db.update(wordEntries).set({ front: input.front, back: input.back, writingAnswer: input.writingAnswer ?? null }).where(and(eq(wordEntries.id, input.id), eq(wordEntries.bookId, input.bookId)));
@@ -753,7 +845,7 @@ export async function deletePersonalEntry(pin: string, bookId: number, entryId: 
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  const book = await accessibleBook(bookId, learner.id);
+  const book = await accessibleBook(bookId, learner);
   if (book.kind !== "personal") throw new Error("マイ単語帳のみ編集できます");
   await db.delete(wordEntries).where(and(eq(wordEntries.id, entryId), eq(wordEntries.bookId, bookId)));
   await db.update(wordBooks).set({ updatedAt: new Date() }).where(eq(wordBooks.id, bookId));
@@ -763,7 +855,7 @@ export async function deletePersonalBook(pin: string, bookId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  const book = await accessibleBook(bookId, learner.id);
+  const book = await accessibleBook(bookId, learner);
   if (book.kind !== "personal" || book.ownerId !== learner.id) throw new Error("マイ単語帳のみ削除できます");
   await db.delete(cardSets).where(and(eq(cardSets.bookId, bookId), eq(cardSets.learnerId, learner.id)));
   await db.delete(wordEntries).where(eq(wordEntries.bookId, bookId));
@@ -781,7 +873,7 @@ export async function createCardSet(pin: string, input: { bookId: number; catego
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const learner = await learnerForPin(pin);
-  await accessibleBook(input.bookId, learner.id);
+  await accessibleBook(input.bookId, learner);
   const created = await db.insert(cardSets).values({ learnerId: learner.id, ...input }).$returningId();
   return created[0]?.id;
 }
@@ -872,7 +964,7 @@ export async function getDayDetail(pin: string, category: StudyCategory, date: s
     entryIds.length ? db.select().from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), inArray(studyProgress.entryId, entryIds), gte(studyProgress.lastReviewedAt, start), lte(studyProgress.lastReviewedAt, end))) : Promise.resolve([]),
     entryIds.length ? db.select().from(studyProgress).where(and(eq(studyProgress.learnerId, learner.id), inArray(studyProgress.entryId, entryIds), gte(studyProgress.nextReviewAt, start), lte(studyProgress.nextReviewAt, end))) : Promise.resolve([]),
     db.select().from(learnerEvents).where(and(eq(learnerEvents.learnerId, learner.id), eq(learnerEvents.eventDate, date))),
-    db.select().from(calendarEvents).where(eq(calendarEvents.eventDate, date)),
+    db.select().from(calendarEvents).where(and(eq(calendarEvents.eventDate, date), classroomVisibleFilter(calendarEvents.classroomId, learner.classroomId))),
   ]);
   const visibleCalendarEvents = managedEvents.filter((item: { category: string }) => item.category === "both" || item.category === category);
   const learned = progress.filter(item => item.correctCount > 0).length;
@@ -978,10 +1070,10 @@ export async function getDashboard(pin: string, category: StudyCategory) {
     db.select().from(studyProgress).where(eq(studyProgress.learnerId, learner.id)),
     db.select().from(studySessions).where(eq(studySessions.learnerId, learner.id)).orderBy(desc(studySessions.createdAt)),
     db.select().from(cardSets).where(and(eq(cardSets.learnerId, learner.id), eq(cardSets.category, category))).orderBy(desc(cardSets.createdAt)),
-    db.select().from(announcements).orderBy(desc(announcements.createdAt)).limit(5),
-    db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
+    db.select().from(announcements).where(classroomVisibleFilter(announcements.classroomId, learner.classroomId)).orderBy(desc(announcements.createdAt)).limit(5),
+    db.select().from(calendarEvents).where(classroomVisibleFilter(calendarEvents.classroomId, learner.classroomId)).orderBy(calendarEvents.eventDate),
     db.select().from(learnerEvents).where(eq(learnerEvents.learnerId, learner.id)).orderBy(learnerEvents.eventDate),
-    db.select().from(recommendedTests).where(and(lte(recommendedTests.startDate, appDateString()), gte(recommendedTests.endDate, appDateString()))).orderBy(desc(recommendedTests.createdAt)).limit(20),
+    db.select().from(recommendedTests).where(and(classroomVisibleFilter(recommendedTests.classroomId, learner.classroomId), lte(recommendedTests.startDate, appDateString()), gte(recommendedTests.endDate, appDateString()))).orderBy(desc(recommendedTests.createdAt)).limit(20),
     db.select({ learnerId: studySessions.learnerId }).from(studySessions).where(gte(studySessions.createdAt, activeSince)),
     db.select().from(creatureStageImages),
     db.select().from(learnerCreatures).where(eq(learnerCreatures.learnerId, learner.id)).orderBy(desc(learnerCreatures.createdAt)),
@@ -1078,7 +1170,7 @@ export async function startDailySelect(pin: string, category: StudyCategory) {
     if (entries.length !== DAILY_SELECT_QUESTION_COUNT) throw new Error("保存済みのAIセレクト10を再開できません。管理者へお問い合わせください");
     return { category, selectDate, entries, resumed: true };
   }
-  const books = await db.select({ id: wordBooks.id }).from(wordBooks).where(and(eq(wordBooks.kind, "standard"), eq(wordBooks.category, category)));
+  const books = await db.select({ id: wordBooks.id }).from(wordBooks).where(and(eq(wordBooks.kind, "standard"), eq(wordBooks.category, category), classroomVisibleFilter(wordBooks.classroomId, learner.classroomId)));
   if (!books.length) throw new Error("2026年度標準単語帳が見つかりません");
   const entries = await db.select().from(wordEntries).where(inArray(wordEntries.bookId, books.map(book => book.id)));
   if (entries.length < DAILY_SELECT_QUESTION_COUNT) throw new Error("AIセレクト10には標準単語帳へ10語以上の登録が必要です");
@@ -1102,35 +1194,33 @@ export async function completeDailySelect(pin: string, category: StudyCategory) 
 }
 
 export async function verifyAdminPassword(password: string) {
-  return password === "tonan2026";
-}
-
-async function requireAdminPassword(password: string) {
-  if (!(await verifyAdminPassword(password))) throw new Error("管理者パスワードが正しくありません");
+  return Boolean(await getAdminAccess(password));
 }
 
 export async function getAdminOverview(password: string) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   await ensureStandardBooks();
-  const books = await db.select().from(wordBooks).where(eq(wordBooks.kind, "standard")).orderBy(wordBooks.category);
+  const classroomId = accessClassroomId(access);
+  const scope = classroomFilter(wordBooks.classroomId, classroomId);
+  const books = await db.select().from(wordBooks).where(and(eq(wordBooks.kind, "standard"), scope)).orderBy(wordBooks.category);
   const bookIds = books.map(book => book.id);
   const [entries, announcementList, tests, events, stageImages, eggs, normalMissionList, creatureImages] = await Promise.all([
     bookIds.length ? db.select().from(wordEntries).where(inArray(wordEntries.bookId, bookIds)).orderBy(wordEntries.entryNo) : Promise.resolve([]),
-    db.select().from(announcements).orderBy(desc(announcements.createdAt)),
-    db.select().from(recommendedTests).orderBy(desc(recommendedTests.createdAt)),
-    db.select().from(calendarEvents).orderBy(calendarEvents.eventDate),
-    db.select().from(monsterStages).orderBy(monsterStages.stage),
-    db.select().from(eggDefinitions).orderBy(eggDefinitions.id),
-    db.select().from(normalMissions).orderBy(normalMissions.sortOrder, normalMissions.id),
-    db.select().from(creatureStageImages).orderBy(creatureStageImages.eggDefinitionId, creatureStageImages.stage),
+    db.select().from(announcements).where(classroomFilter(announcements.classroomId, classroomId)).orderBy(desc(announcements.createdAt)),
+    db.select().from(recommendedTests).where(classroomFilter(recommendedTests.classroomId, classroomId)).orderBy(desc(recommendedTests.createdAt)),
+    db.select().from(calendarEvents).where(classroomFilter(calendarEvents.classroomId, classroomId)).orderBy(calendarEvents.eventDate),
+    access.role === "owner" ? db.select().from(monsterStages).orderBy(monsterStages.stage) : Promise.resolve([]),
+    access.role === "owner" ? db.select().from(eggDefinitions).orderBy(eggDefinitions.id) : Promise.resolve([]),
+    access.role === "owner" ? db.select().from(normalMissions).orderBy(normalMissions.sortOrder, normalMissions.id) : Promise.resolve([]),
+    access.role === "owner" ? db.select().from(creatureStageImages).orderBy(creatureStageImages.eggDefinitionId, creatureStageImages.stage) : Promise.resolve([]),
   ]);
-  return { books, entries, announcements: announcementList, tests, events, monsterStages: stageImages, eggDefinitions: eggs, normalMissions: normalMissionList, creatureStageImages: creatureImages };
+  return { access, books, entries, announcements: announcementList, tests, events, monsterStages: stageImages, eggDefinitions: eggs, normalMissions: normalMissionList, creatureStageImages: creatureImages };
 }
 
 export async function getAdminCalendarDisplaySetting(password: string) {
-  await requireAdminPassword(password);
+  await requireOwnerAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   await db.insert(appSettings).values({ id: 1, showCalendarExtras: 1 }).onDuplicateKeyUpdate({ set: { id: 1 } });
@@ -1139,7 +1229,7 @@ export async function getAdminCalendarDisplaySetting(password: string) {
 }
 
 export async function saveAdminCalendarDisplaySetting(password: string, showCalendarExtras: boolean) {
-  await requireAdminPassword(password);
+  await requireOwnerAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   await db.insert(appSettings).values({ id: 1, showCalendarExtras: showCalendarExtras ? 1 : 0 }).onDuplicateKeyUpdate({ set: { showCalendarExtras: showCalendarExtras ? 1 : 0 } });
@@ -1147,11 +1237,11 @@ export async function saveAdminCalendarDisplaySetting(password: string, showCale
 }
 
 export async function listAdminAccounts(password: string) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const [accountRows, sessions, progress, creatures, eggs] = await Promise.all([
-    db.select().from(learners).orderBy(desc(learners.lastSignedIn)),
+    access.role === "owner" ? db.select().from(learners).orderBy(desc(learners.lastSignedIn)) : db.select().from(learners).where(eq(learners.classroomId, access.classroom.id)).orderBy(desc(learners.lastSignedIn)),
     db.select().from(studySessions),
     db.select().from(studyProgress),
     db.select().from(learnerCreatures),
@@ -1166,11 +1256,12 @@ export async function listAdminAccounts(password: string) {
 }
 
 export async function getAdminAccountDetail(password: string, learnerId: number) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const account = (await db.select().from(learners).where(eq(learners.id, learnerId)).limit(1))[0];
   if (!account) throw new Error("アカウントが見つかりません");
+  if (access.role === "teacher" && account.classroomId !== access.classroom.id) throw new Error("このアカウントを確認する権限がありません");
   const [sessions, progress, creatures, eggs, ticketUses, definitions] = await Promise.all([
     db.select().from(studySessions).where(eq(studySessions.learnerId, learnerId)).orderBy(desc(studySessions.createdAt)),
     db.select().from(studyProgress).where(eq(studyProgress.learnerId, learnerId)),
@@ -1185,21 +1276,21 @@ export async function getAdminAccountDetail(password: string, learnerId: number)
 }
 
 export async function resetAdminRevivalTickets(password: string, learnerId: number) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  const exists = (await db.select({ id: learners.id }).from(learners).where(eq(learners.id, learnerId)).limit(1))[0];
+  const exists = (await db.select({ id: learners.id }).from(learners).where(access.role === "owner" ? eq(learners.id, learnerId) : and(eq(learners.id, learnerId), eq(learners.classroomId, access.classroom.id))).limit(1))[0];
   if (!exists) throw new Error("アカウントが見つかりません");
   await db.update(learners).set({ revivalTickets: 2 }).where(eq(learners.id, learnerId));
   return { learnerId, revivalTickets: 2 };
 }
 
 export async function resetAdminAccountPin(password: string, learnerId: number, newPin: string) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   if (!/^\d{4}$/.test(newPin)) throw new Error("PINコードは4桁の数字で指定してください");
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  const account = (await db.select({ id: learners.id }).from(learners).where(eq(learners.id, learnerId)).limit(1))[0];
+  const account = (await db.select({ id: learners.id }).from(learners).where(access.role === "owner" ? eq(learners.id, learnerId) : and(eq(learners.id, learnerId), eq(learners.classroomId, access.classroom.id))).limit(1))[0];
   if (!account) throw new Error("アカウントが見つかりません");
   const hashed = pinHash(newPin);
   const owner = (await db.select({ id: learners.id }).from(learners).where(eq(learners.pinHash, hashed)).limit(1))[0];
@@ -1209,7 +1300,7 @@ export async function resetAdminAccountPin(password: string, learnerId: number, 
 }
 
 export async function saveMonsterStage(password: string, stage: number, imageDataUrl: string) {
-  await requireAdminPassword(password);
+  await requireOwnerAccess(password);
   if (!Number.isInteger(stage) || stage < 1 || stage > MONSTER_STAGE_COUNT) throw new Error("モンスター段階は1〜13で指定してください");
   const match = /^data:(image\/(?:png|jpeg|webp));base64,([\s\S]+)$/.exec(imageDataUrl);
   if (!match) throw new Error("PNG、JPEG、WebP形式の画像を選択してください");
@@ -1225,7 +1316,7 @@ export async function saveMonsterStage(password: string, stage: number, imageDat
 }
 
 export async function saveEggDefinition(password: string, input: { id?: number; name: string; description: string; isActive: boolean }) {
-  await requireAdminPassword(password);
+  await requireOwnerAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   if (input.id) {
@@ -1239,7 +1330,7 @@ export async function saveEggDefinition(password: string, input: { id?: number; 
 }
 
 export async function saveNormalMission(password: string, input: { id?: number; title: string; targetStudySeconds: number; rewardEggDefinitionId: number; sortOrder: number; isActive: boolean }) {
-  await requireAdminPassword(password);
+  await requireOwnerAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const egg = (await db.select({ id: eggDefinitions.id }).from(eggDefinitions).where(eq(eggDefinitions.id, input.rewardEggDefinitionId)).limit(1))[0];
@@ -1255,7 +1346,7 @@ export async function saveNormalMission(password: string, input: { id?: number; 
 }
 
 export async function saveCreatureStageImage(password: string, eggDefinitionId: number, stage: number, imageDataUrl: string) {
-  await requireAdminPassword(password);
+  await requireOwnerAccess(password);
   if (!Number.isInteger(stage) || stage < 1 || stage > MONSTER_STAGE_COUNT) throw new Error("生物の段階は1〜13で指定してください");
   const match = /^data:(image\/(?:png|jpeg|webp));base64,([\s\S]+)$/.exec(imageDataUrl);
   if (!match) throw new Error("PNG、JPEG、WebP形式の画像を選択してください");
@@ -1273,10 +1364,10 @@ export async function saveCreatureStageImage(password: string, eggDefinitionId: 
 }
 
 export async function replaceStandardEntries(password: string, bookId: number, entries: EntryDraft[]) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  const book = (await db.select().from(wordBooks).where(eq(wordBooks.id, bookId)).limit(1))[0];
+  const book = (await db.select().from(wordBooks).where(and(eq(wordBooks.id, bookId), classroomFilter(wordBooks.classroomId, accessClassroomId(access)))).limit(1))[0];
   if (!book || book.kind !== "standard") throw new Error("標準単語帳を選択してください");
   if (!entries.length || entries.length > 3000) throw new Error("CSVは1〜3,000語で指定してください");
   const batchId = randomUUID().replace(/-/g, "").slice(0, 32);
@@ -1286,54 +1377,54 @@ export async function replaceStandardEntries(password: string, bookId: number, e
 }
 
 export async function deleteStandardImportBatch(password: string, bookId: number, batchId: string) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  const book = (await db.select().from(wordBooks).where(eq(wordBooks.id, bookId)).limit(1))[0];
+  const book = (await db.select().from(wordBooks).where(and(eq(wordBooks.id, bookId), classroomFilter(wordBooks.classroomId, accessClassroomId(access)))).limit(1))[0];
   if (!book || book.kind !== "standard") throw new Error("標準単語帳を選択してください");
   await db.delete(wordEntries).where(and(eq(wordEntries.bookId, bookId), eq(wordEntries.importBatchId, batchId)));
 }
 
 export async function deleteStandardEntry(password: string, entryId: number) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const entry = (await db.select({ id: wordEntries.id, bookId: wordEntries.bookId }).from(wordEntries).where(eq(wordEntries.id, entryId)).limit(1))[0];
   if (!entry) return;
-  const book = (await db.select().from(wordBooks).where(eq(wordBooks.id, entry.bookId)).limit(1))[0];
+  const book = (await db.select().from(wordBooks).where(and(eq(wordBooks.id, entry.bookId), classroomFilter(wordBooks.classroomId, accessClassroomId(access)))).limit(1))[0];
   if (!book || book.kind !== "standard") throw new Error("標準単語帳の単語のみ削除できます");
   await db.delete(wordEntries).where(eq(wordEntries.id, entryId));
 }
 
 export async function deleteCalendarEvent(password: string, eventId: number) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.delete(calendarEvents).where(eq(calendarEvents.id, eventId));
+  await db.delete(calendarEvents).where(and(eq(calendarEvents.id, eventId), classroomFilter(calendarEvents.classroomId, accessClassroomId(access))));
 }
 
 export async function deleteRecommendedTest(password: string, testId: number) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.delete(recommendedTests).where(eq(recommendedTests.id, testId));
+  await db.delete(recommendedTests).where(and(eq(recommendedTests.id, testId), classroomFilter(recommendedTests.classroomId, accessClassroomId(access))));
 }
 
 export async function createStandardBook(password: string, category: StudyCategory, name: string) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
   const trimmedName = name.trim();
   if (!trimmedName) throw new Error("単語帳名を入力してください");
-  const created = await db.insert(wordBooks).values({ category, kind: "standard", name: trimmedName }).$returningId();
+  const created = await db.insert(wordBooks).values({ category, kind: "standard", name: trimmedName, classroomId: accessClassroomId(access) }).$returningId();
   return created[0]?.id;
 }
 
 export async function saveStandardEntry(password: string, input: { id?: number; bookId: number; entryNo: number; front: string; back: string; writingAnswer?: string | null }) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  const book = (await db.select().from(wordBooks).where(eq(wordBooks.id, input.bookId)).limit(1))[0];
+  const book = (await db.select().from(wordBooks).where(and(eq(wordBooks.id, input.bookId), classroomFilter(wordBooks.classroomId, accessClassroomId(access)))).limit(1))[0];
   if (!book || book.kind !== "standard") throw new Error("標準単語帳を選択してください");
   if (input.id) {
     await db.update(wordEntries).set({ entryNo: input.entryNo, front: input.front, back: input.back, writingAnswer: input.writingAnswer ?? null }).where(eq(wordEntries.id, input.id));
@@ -1344,31 +1435,34 @@ export async function saveStandardEntry(password: string, input: { id?: number; 
 }
 
 export async function publishAnnouncement(password: string, title: string, body: string) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(announcements).values({ title, body });
+  await db.insert(announcements).values({ classroomId: accessClassroomId(access), title, body });
 }
 
 export async function deleteAnnouncement(password: string, announcementId: number) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.delete(announcements).where(eq(announcements.id, announcementId));
+  await db.delete(announcements).where(and(eq(announcements.id, announcementId), classroomFilter(announcements.classroomId, accessClassroomId(access))));
 }
 
 export async function publishRecommendedTest(password: string, input: { title: string; category: StudyCategory; bookId: number; startNo: number; endNo: number; questionCount: number; startDate: string; endDate: string }) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  const inserted = await db.insert(recommendedTests).values(input);
+  const book = (await db.select().from(wordBooks).where(and(eq(wordBooks.id, input.bookId), classroomFilter(wordBooks.classroomId, accessClassroomId(access)))).limit(1))[0];
+  if (!book || book.kind !== "standard") throw new Error("自分の教室の標準単語帳を選択してください");
+  const classroomId = accessClassroomId(access);
+  const inserted = await db.insert(recommendedTests).values({ ...input, classroomId });
   const recommendationId = Number(inserted[0]?.insertId);
-  await db.insert(announcements).values({ title: `おすすめテスト：${input.title}`, body: `${input.startDate}〜${input.endDate}に受講できるおすすめテストを配信しました。 [recommendation:${recommendationId}]` });
+  await db.insert(announcements).values({ classroomId, title: `おすすめテスト：${input.title}`, body: `${input.startDate}〜${input.endDate}に受講できるおすすめテストを配信しました。 [recommendation:${recommendationId}]` });
 }
 
 export async function addCalendarEvent(password: string, input: { eventDate: string; title: string; category: "english" | "kanji" | "both" }) {
-  await requireAdminPassword(password);
+  const access = await requireAdminAccess(password);
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
-  await db.insert(calendarEvents).values(input);
+  await db.insert(calendarEvents).values({ ...input, classroomId: accessClassroomId(access) });
 }

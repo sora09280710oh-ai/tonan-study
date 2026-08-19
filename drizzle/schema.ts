@@ -16,12 +16,25 @@ export const learners = mysqlTable("learners", {
   id: int("id").autoincrement().primaryKey(),
   pinHash: varchar("pinHash", { length: 64 }).notNull().unique(),
   displayName: varchar("displayName", { length: 40 }),
+  classroomId: int("classroomId"),
   revivalTickets: int("revivalTickets").notNull().default(2),
   monsterStage: int("monsterStage").notNull().default(1),
   activeCreatureId: int("activeCreatureId"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
-});
+}, table => [index("learners_classroom_idx").on(table.classroomId)]);
+
+export const classrooms = mysqlTable("classrooms", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  joinCode: varchar("joinCode", { length: 16 }).notNull(),
+  teacherPasswordHash: varchar("teacherPasswordHash", { length: 64 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  uniqueIndex("classrooms_join_code_unique").on(table.joinCode),
+  uniqueIndex("classrooms_teacher_password_unique").on(table.teacherPasswordHash),
+]);
 
 export const appSettings = mysqlTable("appSettings", {
   id: int("id").primaryKey(),
@@ -42,6 +55,7 @@ export const revivalTicketUses = mysqlTable("revivalTicketUses", {
 export const wordBooks = mysqlTable("wordBooks", {
   id: int("id").autoincrement().primaryKey(),
   ownerId: int("ownerId"),
+  classroomId: int("classroomId"),
   category: mysqlEnum("category", ["english", "kanji"]).notNull(),
   kind: mysqlEnum("kind", ["standard", "personal"]).notNull(),
   name: varchar("name", { length: 160 }).notNull(),
@@ -49,6 +63,7 @@ export const wordBooks = mysqlTable("wordBooks", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => [
   index("wordBooks_owner_category_idx").on(table.ownerId, table.category),
+  index("wordBooks_classroom_category_idx").on(table.classroomId, table.category),
 ]);
 
 export const wordEntries = mysqlTable("wordEntries", {
@@ -106,13 +121,15 @@ export const studyProgress = mysqlTable("studyProgress", {
 
 export const announcements = mysqlTable("announcements", {
   id: int("id").autoincrement().primaryKey(),
+  classroomId: int("classroomId"),
   title: varchar("title", { length: 160 }).notNull(),
   body: text("body").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [index("announcements_classroom_created_idx").on(table.classroomId, table.createdAt)]);
 
 export const recommendedTests = mysqlTable("recommendedTests", {
   id: int("id").autoincrement().primaryKey(),
+  classroomId: int("classroomId"),
   title: varchar("title", { length: 160 }).notNull(),
   category: mysqlEnum("category", ["english", "kanji"]).notNull(),
   bookId: int("bookId").notNull(),
@@ -122,15 +139,16 @@ export const recommendedTests = mysqlTable("recommendedTests", {
   startDate: varchar("startDate", { length: 10 }).notNull(),
   endDate: varchar("endDate", { length: 10 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-});
+}, table => [index("recommendedTests_classroom_date_idx").on(table.classroomId, table.startDate, table.endDate)]);
 
 export const calendarEvents = mysqlTable("calendarEvents", {
   id: int("id").autoincrement().primaryKey(),
+  classroomId: int("classroomId"),
   eventDate: varchar("eventDate", { length: 10 }).notNull(),
   title: varchar("title", { length: 160 }).notNull(),
   category: mysqlEnum("category", ["english", "kanji", "both"]).notNull().default("both"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-}, table => [index("calendarEvents_date_idx").on(table.eventDate)]);
+}, table => [index("calendarEvents_date_idx").on(table.eventDate), index("calendarEvents_classroom_date_idx").on(table.classroomId, table.eventDate)]);
 
 export const learnerEvents = mysqlTable("learnerEvents", {
   id: int("id").autoincrement().primaryKey(),
